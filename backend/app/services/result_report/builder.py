@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, get_args
 
-from sqlalchemy import case, func, tuple_, update
+from sqlalchemy import String, case, cast, func, tuple_, update
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -31,6 +31,7 @@ from app.services.llm_client import (
     llm_call_json,
     llm_request_scope,
     normalize_native_search_upstream,
+    resolve_reasoning_effort,
 )
 from app.services.result_report.queries import (
     REPORT_SCOPE_FINGERPRINT_KEY,
@@ -47,6 +48,7 @@ from app.services.result_report.schema import (
     AnalyticConfidence,
     Chart,
     DissentingView,
+    DomainConsistency,
     EvidenceRef,
     FullReport,
     I18nText,
@@ -208,6 +210,7 @@ class ReportGenerationOverrides:
     supports_native_search_override: bool | None = None
     native_search_upstream_override: str | None = None
     temperature: float | None = None
+    reasoning_effort: str | None = None
     inherit_context_policy: bool = True
 
 
@@ -481,6 +484,11 @@ def _report_llm_scope_kwargs(
     scope_kwargs: dict[str, object] = {"purpose": "result_report"}
     parsed_context = context.parsed_context if isinstance(context.parsed_context, dict) else {}
     inherit_context_policy = overrides is None or overrides.inherit_context_policy
+    scope_kwargs["reasoning_effort"] = resolve_reasoning_effort(
+        overrides.reasoning_effort
+        if overrides is not None and overrides.reasoning_effort is not None
+        else _normalize_optional_text(parsed_context.get("reasoning_effort"))
+    )
     effective_base_url = (
         (overrides.base_url if overrides else None)
         or (parsed_context.get("llm_base_url") if inherit_context_policy else None)
@@ -647,6 +655,10 @@ async def build_report(
                         target_language=target_language,
                     )
                 except asyncio.CancelledError:
+                    if target_language is not None:
+                        # Translation never replaces readable source with an
+                        # analysis-generation marker, even for a stale scope.
+                        raise
                     if _report_runtime_lock_is_alive(lease_holder):
                         try:
                             await asyncio.to_thread(
@@ -665,6 +677,8 @@ async def build_report(
                 except BranchLineageError:
                     raise
                 except Exception:  # noqa: BLE001 - fail-soft marker before releasing lease
+                    if target_language is not None:
+                        raise
                     if _report_runtime_lock_is_alive(lease_holder):
                         try:
                             await asyncio.to_thread(
@@ -720,8 +734,7 @@ async def _build_report_unlocked(
         )
     saved_report = _PRESERVED_REPORT.get()
     if detail_level == "brief" and saved_report is not None and saved_report.detail_level == "full":
-        # Automatic summaries never replace an existing full analysis. The story
-        # endpoint retains responsibility for marking an old scope as historical.
+        # Preservation is scoped to the current durable result fingerprint.
         return saved_report
     reducer_result = await asyncio.to_thread(
         reduce_report,
@@ -1087,6 +1100,7 @@ def _translated_content_has_language(
     from app.services.result_report.translation import (
         ReportTranslationProtection,
         report_text_fields,
+        strip_domain_disclosure,
     )
 
     if not content.title or not content.summary or content.section_texts is None:
@@ -1096,9 +1110,13 @@ def _translated_content_has_language(
     protection = ReportTranslationProtection(
         report, target_language=language, identity_names=identity_names
     )
-    fields = report_text_fields(
-        content.model_dump(mode="json"), source_language=language, target_language=language
-    )
+    try:
+        payload = strip_domain_disclosure(
+            report, content.model_dump(mode="json"), language=language,
+        )
+    except ValueError:
+        return False
+    fields = report_text_fields(payload, source_language=language, target_language=language)
     for field in fields:
         masked = protection.protect(field.text)
         authored = re.sub(r"\[\[REPORT_KEEP_[^\]\s]+\]\]", "", masked)
@@ -1127,6 +1145,7 @@ async def _translate_report_unlocked(
         report_text_fields,
         set_report_text,
         split_translation_text,
+        strip_domain_disclosure,
     )
 
     source, identity_names = await asyncio.to_thread(
@@ -1143,7 +1162,10 @@ async def _translate_report_unlocked(
             return source
     context = await asyncio.to_thread(_load_builder_context, scenario_id, source.target_branch_id)
     source_language = source.language
-    payload = authored_content(source, source_language).model_dump(mode="json")
+    payload = strip_domain_disclosure(
+        source, authored_content(source, source_language).model_dump(mode="json"),
+        language=source_language,
+    )
     include_sections = source.detail_level != "brief"
     if not include_sections:
         # The brief digest is deterministic bilingual chrome around unchanged
@@ -1242,7 +1264,7 @@ async def _translate_report_unlocked(
                     base_url=overrides.base_url if overrides else None,
                     model=overrides.model if overrides else None,
                     temperature=0.0,
-                    reasoning_effort="low",
+                    reasoning_effort=resolve_reasoning_effort(),
                     timeout=timeout,
                 ),
                 timeout=timeout,
@@ -1280,6 +1302,11 @@ async def _translate_report_unlocked(
         _ensure_report_runtime_lock_alive(report_lock_holder)
     for path, keys in field_records:
         set_report_text(payload, path, "\n\n".join(translations[key] for key in keys))
+    if source.domain_consistency is not None:
+        payload["disclaimer"] = "\n\n".join(filter(None, (
+            source.domain_consistency.disclosure(target_language),
+            payload.get("disclaimer"),
+        )))
     translated = ReportAuthoredContent.model_validate(payload)
     if not _translated_content_has_language(source, translated, target_language, identity_names):
         raise ResultReportTranslationError(
@@ -1658,14 +1685,15 @@ async def build_report_sse_stream(
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
-                    with contextlib.suppress(Exception):
-                        await asyncio.to_thread(
-                            _persist_failed_report_if_lock_available,
-                            scenario_id,
-                            dominant_branch_id,
-                            replace_cancelled=True,
-                            report_scope=resolved_scope,
-                        )
+                    if target_language is None:
+                        with contextlib.suppress(Exception):
+                            await asyncio.to_thread(
+                                _persist_failed_report_if_lock_available,
+                                scenario_id,
+                                dominant_branch_id,
+                                replace_cancelled=True,
+                                report_scope=resolved_scope,
+                            )
                     yield encode_sse_event(
                         ResultReportSSEEvent(
                             event="report_failed",
@@ -1781,7 +1809,7 @@ async def plan_outline(
                         if overrides and overrides.temperature is not None
                         else 0.3
                     ),
-                    reasoning_effort="medium",
+                    reasoning_effort=resolve_reasoning_effort(),
                 ),
                 timeout=settings.REPORT_PLAN_TIMEOUT_SECONDS,
             )
@@ -1893,7 +1921,7 @@ async def _generate_section_tier(
                         if overrides and overrides.temperature is not None
                         else (0.55 if tier == "generation" else 0.4)
                     ),
-                    reasoning_effort="medium",
+                    reasoning_effort=resolve_reasoning_effort(),
                 ),
                 timeout=settings.REPORT_SECTION_TIMEOUT_SECONDS,
             )
@@ -2021,6 +2049,7 @@ def _build_outline_prompt(context: BuilderContext, reducer_result: ReducerResult
             "summary_i18n must use completed voice. Do not write 本报告将..., 报告将..., "
             "This report will..., or any future-tense planning summary.",
             _AFFECT_PROXY_PROMPT_CAVEAT,
+            _domain_context_prompt(reducer_result),
             "Choose 2-5 unique section ids from: "
             + ", ".join(_ALLOWED_SECTION_IDS)
             + ".",
@@ -2158,6 +2187,7 @@ def _build_section_prompt(
             "final-state claims, cite supporting early, middle, and late rounds when "
             "available. Do not cite every evidence row by default.",
             _AFFECT_PROXY_PROMPT_CAVEAT,
+            _domain_context_prompt(reducer_result),
             format_untrusted_text_block("User question", context.question, max_chars=1200),
             format_untrusted_text_block(
                 "Section plan",
@@ -2495,6 +2525,10 @@ def _assemble_report(
             items=[],
         )
     resolved_premortem_analysis = _sanitize_premortem_display_texts(resolved_premortem_analysis)
+    domain_consistency = _report_domain_consistency(reducer_result)
+    confidence = _sanitize_analytic_confidence_display_texts(reducer_result.analytic_confidence)
+    if domain_consistency is not None:
+        confidence = domain_consistency.bound_confidence(confidence)
     report = FullReport(
         version="1.0",
         generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -2513,15 +2547,14 @@ def _assemble_report(
         verdict=Verdict(
             headline_answer=headline,
             likelihood=reducer_result.likelihood,
-            analytic_confidence=_sanitize_analytic_confidence_display_texts(
-                reducer_result.analytic_confidence
-            ),
+            analytic_confidence=confidence,
             disclaimer=_compose_verdict_disclaimer(
                 context,
                 reducer_result,
                 headline=headline,
             ),
         ),
+        domain_consistency=domain_consistency,
         sections=sections_with_charts,
         evidence=safe_evidence,
         indicators_to_watch=_sanitize_indicator_display_texts(
@@ -2567,6 +2600,9 @@ def _compose_verdict_disclaimer(
 ) -> str | None:
     language = "zh" if context.language == "zh" else "en"
     clauses: list[str] = []
+    domain_consistency = _report_domain_consistency(reducer_result)
+    if domain_consistency is not None:
+        clauses.append(domain_consistency.disclosure(language))
     existing = _sanitize_optional_report_display_text(
         reducer_result.verdict_disclaimer
     )
@@ -2587,7 +2623,37 @@ def _compose_verdict_disclaimer(
             if language == "zh"
             else _AFFECT_PROXY_VERDICT_CAVEAT_EN
         )
-    return " ".join(clauses) or None
+    return "\n\n".join(clauses) or None
+
+
+def _report_domain_consistency(reducer_result: ReducerResult) -> DomainConsistency | None:
+    context = reducer_result.domain_context
+    if context is None:
+        return None
+    return DomainConsistency.model_validate({
+        key: value for key, value in context.items()
+        if key in DomainConsistency.model_fields
+    })
+
+
+def _domain_context_prompt(reducer_result: ReducerResult) -> str:
+    if reducer_result.domain_context is None:
+        return ""
+    return (
+        "DOMAIN_STATE_CONSISTENCY: Use the committed deterministic state and adjudications "
+        "below when describing adopted simulation decisions or modeled effects. A COMMENT, "
+        "proposal, endorsement, quote, or rejected adjudication is not execution evidence. "
+        "Distinguish commitment_state (adopted simulation decision under frozen rules) from "
+        "other modeled state. If narrative values disagree with state, explicitly disclose "
+        "the disagreement and describe the narrative as proposed/unverified, never as the "
+        "adopted or executed value. All state is a scenario assumption, not observed reality. "
+        "Unavailable state cannot corroborate narrative.\n\n"
+        + format_untrusted_text_block(
+            "Deterministic domain state and adjudications",
+            json.dumps(reducer_result.domain_context, ensure_ascii=False, separators=(",", ":")),
+            max_chars=24000,
+        )
+    )
 
 
 def _single_path_disclaimer(likelihood: Likelihood, *, language: str) -> str:
@@ -2932,7 +2998,10 @@ async def _build_interview_evidence(
             message="No interview candidates were available.",
         )
 
-    prompt = _build_interview_prompt(context, candidates)
+    prompt = "\n\n".join((
+        _build_interview_prompt(context, candidates),
+        _domain_context_prompt(reducer_result),
+    ))
     try:
         with llm_request_scope(**_report_llm_scope_kwargs(context, overrides)):
             payload = await asyncio.wait_for(
@@ -2946,7 +3015,7 @@ async def _build_interview_evidence(
                         if overrides and overrides.temperature is not None
                         else 0.25
                     ),
-                    reasoning_effort="low",
+                    reasoning_effort=resolve_reasoning_effort(),
                 ),
                 timeout=settings.REPORT_SECTION_TIMEOUT_SECONDS,
             )
@@ -3483,7 +3552,7 @@ async def _build_premortem_analysis(
                         if overrides and overrides.temperature is not None
                         else 0.35
                     ),
-                    reasoning_effort="medium",
+                    reasoning_effort=resolve_reasoning_effort(),
                 ),
                 timeout=settings.REPORT_SECTION_TIMEOUT_SECONDS,
             )
@@ -3510,6 +3579,7 @@ def _build_premortem_prompt(
     return "\n\n".join(
         [
             "REPORT_PREMORTEM",
+            _domain_context_prompt(reducer_result),
             "Construct 1-3 failure modes for the simulated dominant outcome. Return "
             "strict JSON only. Treat the supplied coordinates as diverse internal "
             "simulation signals, never as statistical independence or independent "
@@ -3783,7 +3853,7 @@ async def _build_indicators_llm(
                         if overrides and overrides.temperature is not None
                         else 0.5
                     ),
-                    reasoning_effort="low",
+                    reasoning_effort=resolve_reasoning_effort(),
                 ),
                 timeout=settings.REPORT_SECTION_TIMEOUT_SECONDS,
             )
@@ -3886,6 +3956,7 @@ def _build_indicators_prompt(
         item
         for item in [
             "REPORT_INDICATORS",
+            _domain_context_prompt(reducer_result),
             directive,
             shape,
             f"Allowed evidence ids (use only these): {json.dumps(allowed_ids)}",
@@ -4689,6 +4760,11 @@ def _sync_payload_analytic_confidence(
             confidence,
             evidence_coverage,
         )
+    domain_consistency = payload.get("domain_consistency")
+    if isinstance(domain_consistency, dict):
+        confidence = DomainConsistency.model_validate(domain_consistency).bound_confidence(
+            confidence,
+        )
     verdict = payload.get("verdict")
     if not isinstance(verdict, dict):
         return
@@ -4789,7 +4865,7 @@ def _load_existing_full_report(scenario_id: str) -> FullReport | None:
 
 @contextlib.contextmanager
 def _preserve_saved_report(scenario_id: str):
-    """Keep a durable completed report readable until a replacement succeeds."""
+    """Keep a current completed report readable until a replacement succeeds."""
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
         context = (
@@ -4798,6 +4874,14 @@ def _preserve_saved_report(scenario_id: str):
             else {}
         )
         existing = _coerce_existing_full_report(context.get("full_report"))
+        authority = _REPORT_WRITE_AUTHORITY.get()
+        fingerprint = (
+            authority.fingerprint
+            if authority is not None
+            else report_result_fingerprint(session, scenario_id)
+        )
+        if context.get(REPORT_SCOPE_FINGERPRINT_KEY) != fingerprint:
+            existing = None
     token = _PRESERVED_REPORT.set(
         existing if existing is not None and existing.status in {"complete", "partial"} else None
     )
@@ -5096,11 +5180,11 @@ def _persist_placeholder_report_if_absent(
         )
         branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
         existing = _coerce_existing_full_report(parsed_context.get("full_report"))
-        if existing is not None and existing.status in {"complete", "partial"}:
-            return existing
         authority = _REPORT_WRITE_AUTHORITY.get()
         if parsed_context.get(REPORT_SCOPE_FINGERPRINT_KEY) != authority.fingerprint:
             existing = None
+        if existing is not None and existing.status in {"complete", "partial"}:
+            return existing
         if existing is not None and existing.target_branch_id == target_branch_id:
             if status == "failed":
                 should_transition = (
@@ -5638,18 +5722,44 @@ def _persist_report_payload(
             or report_result_fingerprint(session, scenario_id) != authority.fingerprint
         ):
             raise ResultReportScopeChangedError("Scenario results changed during report generation")
+        # Legacy context may be a JSON scalar/list or invalid JSON. Read raw
+        # text so history retention does not break this writer's repair path.
+        raw_context = session.exec(select(cast(Scenario.parsed_context, String)).where(
+            Scenario.id == scenario_id,
+        )).first()
+        try:
+            current_context = json.loads(raw_context) if raw_context else {}
+        except (TypeError, ValueError):
+            current_context = {}
+        if not isinstance(current_context, dict):
+            current_context = {}
+        current_report = _coerce_existing_full_report(current_context.get("full_report"))
         if expected_previous_report is not None:
-            current_scenario = session.get(Scenario, scenario_id)
-            current_context = (
-                current_scenario.parsed_context
-                if current_scenario and isinstance(current_scenario.parsed_context, dict)
-                else {}
-            )
-            current_report = _coerce_existing_full_report(current_context.get("full_report"))
             if current_report is None or current_report.model_dump(
                 mode="json"
             ) != expected_previous_report.model_dump(mode="json"):
                 raise ResultReportScopeChangedError("Saved report changed during translation")
+        previous_fingerprint = current_context.get(REPORT_SCOPE_FINGERPRINT_KEY)
+        if (
+            current_report is not None
+            and current_report.detail_level == "full"
+            and current_report.status in {"complete", "partial"}
+            and previous_fingerprint != authority.fingerprint
+        ):
+            # One validated snapshot, never an accumulating list. Preserve its
+            # original scope rather than rebinding historical analysis as current.
+            path_value_pairs.extend([
+                "$.full_report_history",
+                func.json(json.dumps({
+                    "report": current_report.model_dump(mode="json"),
+                    "result_fingerprint": (
+                        previous_fingerprint
+                        if isinstance(previous_fingerprint, str)
+                        and len(previous_fingerprint) <= 128
+                        else None
+                    ),
+                }, ensure_ascii=False)),
+            ])
         result = session.exec(
             update(Scenario)
             .where(Scenario.id == scenario_id)
@@ -5845,6 +5955,7 @@ def _normalize_overrides(
             overrides.get("native_search_upstream_override")
         ),
         temperature=normalized_temperature,
+        reasoning_effort=_normalize_optional_text(overrides.get("reasoning_effort")),
         inherit_context_policy=overrides.get("inherit_context_policy") is not False,
     )
 

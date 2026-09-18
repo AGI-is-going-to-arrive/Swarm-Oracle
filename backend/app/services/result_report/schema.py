@@ -243,6 +243,100 @@ class Verdict(_StrictModel):
     disclaimer: str | None = None
 
 
+class DomainStateValue(_StrictModel):
+    variable_id: str = Field(min_length=1, max_length=160)
+    label_en: str = Field(min_length=1, max_length=240)
+    label_zh: str = Field(min_length=1, max_length=240)
+    semantic_role: Literal["stock", "flow", "capacity", "threshold", "commitment_state"]
+    unit: str = Field(min_length=1, max_length=80)
+    value: str | bool
+
+
+class DomainConsistency(_StrictModel):
+    """A state receipt is not a semantic verification of report narrative."""
+
+    status: Literal["unverified", "unavailable"]
+    branch_id: str = Field(min_length=1)
+    schema_hash: str | None = None
+    as_of_round: int | None = Field(default=None, ge=1)
+    state_revision: str | None = None
+    failure_code: str | None = None
+    epistemic_scope: Literal["scenario_assumption"] = "scenario_assumption"
+    values: list[DomainStateValue] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_state_receipt(self) -> "DomainConsistency":
+        if self.status == "unverified" and (
+            not self.schema_hash or not self.state_revision
+            or not self.as_of_round or not self.values
+        ):
+            raise ValueError("available domain state requires a complete state receipt")
+        if self.status == "unavailable" and (self.values or self.state_revision is not None):
+            raise ValueError("unavailable domain state cannot publish committed values")
+        if len({value.variable_id for value in self.values}) != len(self.values):
+            raise ValueError("domain state variable IDs must be unique")
+        return self
+
+    def bound_confidence(self, confidence: AnalyticConfidence) -> AnalyticConfidence:
+        en = "Narrative/state consistency is unverified; quotes do not establish policy execution."
+        zh = "叙述与领域状态的一致性未核实；发言引用不能证明政策执行。"
+        basis = confidence.basis_i18n or I18nText(zh=confidence.basis, en=confidence.basis)
+
+        def append_once(text: str, suffix: str) -> str:
+            return text if suffix in text else f"{text} {suffix}"
+
+        return AnalyticConfidence(
+            level="low",
+            basis=append_once(confidence.basis, en),
+            basis_i18n=I18nText(zh=append_once(basis.zh, zh), en=append_once(basis.en, en)),
+        )
+
+    def disclosure(self, language: LanguageCode) -> str:
+        if self.status == "unavailable":
+            return (
+                "模拟状态暂不可核验；发言和提案不能证明政策已采纳或执行。"
+                "叙述与状态的一致性未核实，领域模型仅为情景假设。"
+                if language == "zh"
+                else "Simulation state is unavailable. Statements and proposals do not prove "
+                "policy adoption or execution. The domain model is a scenario assumption; "
+                "narrative/state consistency is unverified."
+            )
+
+        def role_label(value: DomainStateValue) -> str:
+            if value.semantic_role == "commitment_state":
+                return "模拟已采纳决策" if language == "zh" else "adopted simulation decision"
+            return "模型状态" if language == "zh" else "modeled state"
+
+        def display_unit(value: DomainStateValue) -> str:
+            units = {
+                "second": "秒" if language == "zh" else "seconds",
+                "count": "个" if language == "zh" else "count",
+                "basis_point": "基点" if language == "zh" else "basis points",
+                "unitless": "",
+            }
+            # Custom units and enum values retain their frozen meaning. Never
+            # guess a conversion or denomination from the label.
+            return units.get(value.unit, value.unit)
+
+        values = ("；" if language == "zh" else "; ").join(
+            f"{value.label_zh if language == 'zh' else value.label_en} "
+            f"({role_label(value)}): "
+            f"{str(value.value).lower() if isinstance(value.value, bool) else value.value} "
+            f"{display_unit(value)}".rstrip()
+            for value in self.values
+        )
+        return (
+            f"第 {self.as_of_round} 轮记录：{values}。"
+            "叙述与状态的一致性未核实；不同数值须视为未落实的提案或不一致叙述。"
+            "以上为情景假设，采纳不等于执行。"
+            if language == "zh"
+            else f"Round {self.as_of_round} recorded state: {values}. "
+            "Narrative/state consistency is unverified. Treat any different narrative value as "
+            "an unimplemented proposal or an inconsistent account. These are scenario assumptions; "
+            "adoption does not prove execution."
+        )
+
+
 class ProbabilityBarBranch(_StrictModel):
     branch_id: str = Field(min_length=1)
     label: str = Field(min_length=1)
@@ -611,6 +705,7 @@ class FullReport(_StrictModel):
     status: ReportStatus
     tier: ReportTier
     verdict: Verdict
+    domain_consistency: DomainConsistency | None = None
     claims: list[Claim] = Field(default_factory=list)
     sections: list[ReportSection] = Field(default_factory=list)
     evidence: list[EvidenceRef] = Field(default_factory=list)
@@ -637,6 +732,20 @@ class FullReport(_StrictModel):
             raise ValueError("available_languages cannot be empty")
         if len(set(self.available_languages)) != len(self.available_languages):
             raise ValueError("available_languages cannot contain duplicates")
+        if self.domain_consistency is not None:
+            if self.domain_consistency.branch_id != self.target_branch_id:
+                raise ValueError("domain consistency must match the report target branch")
+            if self.verdict.analytic_confidence.level != "low":
+                raise ValueError("unverified domain narrative requires low analytic confidence")
+            if not (self.verdict.disclaimer or "").startswith(
+                self.domain_consistency.disclosure(self.language)
+            ):
+                raise ValueError("domain narrative requires its canonical state disclosure")
+            for language, content in self.authored_content_i18n.items():
+                if not (content.disclaimer or "").startswith(
+                    self.domain_consistency.disclosure(language)
+                ):
+                    raise ValueError("domain translation requires its canonical state disclosure")
         if self.authored_content_i18n:
             primary = ReportAuthoredContent(
                 headline_answer=self.verdict.headline_answer,

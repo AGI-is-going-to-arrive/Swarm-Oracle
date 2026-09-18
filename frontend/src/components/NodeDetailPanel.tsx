@@ -46,6 +46,8 @@ interface NodeDetailPanelProps {
   onClose: () => void;
   desktopRightOffset?: number;
   restoreFocusTarget?: HTMLElement | null;
+  onAsk?: () => void;
+  inline?: boolean;
 }
 
 const TYPE_COLORS = NODE_TYPE_COLORS_HEX;
@@ -113,6 +115,8 @@ export function NodeDetailPanel({
   onClose,
   desktopRightOffset = 8,
   restoreFocusTarget = null,
+  onAsk,
+  inline = false,
 }: NodeDetailPanelProps) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -197,14 +201,14 @@ export function NodeDetailPanel({
         handleClose({ restoreFocus: true });
       }}
       style={{
-        position: 'absolute',
-        top: isCompactViewport ? 'auto' : 8,
-        right: isCompactViewport ? 8 : desktopRightOffset,
-        bottom: isCompactViewport ? 8 : 'auto',
-        left: isCompactViewport ? 8 : 'auto',
-        width: isCompactViewport ? 'auto' : 280,
-        maxWidth: isCompactViewport ? 'calc(100% - 16px)' : 320,
-        maxHeight: isCompactViewport ? 'min(46%, 360px)' : 'calc(100% - 16px)',
+        position: inline ? 'relative' : 'absolute',
+        top: inline ? undefined : isCompactViewport ? 'auto' : 8,
+        right: inline ? undefined : isCompactViewport ? 8 : desktopRightOffset,
+        bottom: inline ? undefined : isCompactViewport ? 8 : 'auto',
+        left: inline ? undefined : isCompactViewport ? 8 : 'auto',
+        width: inline ? '100%' : isCompactViewport ? 'auto' : 280,
+        maxWidth: inline ? '100%' : isCompactViewport ? 'calc(100% - 16px)' : 320,
+        maxHeight: inline ? undefined : isCompactViewport ? 'min(46%, 360px)' : 'calc(100% - 16px)',
         overflow: 'auto',
         background: '#1e1e30',
         border: '1px solid #444',
@@ -241,6 +245,12 @@ export function NodeDetailPanel({
           &times;
         </button>
       </div>
+
+      {onAsk ? (
+        <button type="button" data-testid="node-detail-ask" className="conv-btn conv-btn--send" onClick={onAsk} style={{ marginBottom: '0.75rem' }}>
+          {t('node_detail.ask_about_node', 'Ask about this node')}
+        </button>
+      ) : null}
 
       {/* Type badge */}
       <div style={{ marginBottom: '0.5rem' }}>

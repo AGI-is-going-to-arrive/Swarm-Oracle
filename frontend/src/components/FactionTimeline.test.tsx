@@ -26,6 +26,12 @@ type FactionForceGraphMockProps = {
 
 const mockFactionForceGraphProps = vi.hoisted(() => [] as FactionForceGraphMockProps[]);
 
+vi.mock('../api/client', async importOriginal => ({
+  ...await importOriginal<typeof import('../api/client')>(),
+  getScenario: async () => ({ conversation_llm_configured: true }),
+  getConversation: async (threadId: string) => ({ thread_id: threadId, scenario_id: 'sc1', turns: [] }),
+}));
+
 vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: vi.fn(() => ({ loading: false, enabled: true, capabilities: null, error: null })),
 }));
@@ -722,6 +728,7 @@ describe('FactionTimeline', () => {
         .mockResolvedValueOnce(jsonResponse([
           {
             round: 1,
+            branch_id: 'branch-faction',
             factions: [
               { key: 'moderates', label: 'Moderates', members: ['a1'], stance_center: 0.2, confidence: 0.6 },
             ],
@@ -757,6 +764,10 @@ describe('FactionTimeline', () => {
       const startBody = JSON.parse(String(startOptions.body));
       expect(startBody.scenario_id).toBe('sc1');
       expect(startBody.agent_identity_id).toBeNull();
+      expect(startBody.origin_branch_id).toBe('branch-faction');
+      expect(startBody.origin_round_number).toBe(1);
+      expect(startBody.origin_node_type).toBe('faction_event:betrayal');
+      expect(startBody.origin_node_id).toBe('a1');
     } finally {
       vi.unstubAllGlobals();
     }

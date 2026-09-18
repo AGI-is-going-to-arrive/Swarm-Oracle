@@ -374,6 +374,19 @@ type PendingSimulationLaunch = {
   runtimePreset?: ScenarioRuntimePresetId;
 };
 
+type DebateLaunchOptions = NonNullable<Parameters<typeof createDebate>[2]>;
+type PendingDebateLaunch = {
+  question: string;
+  options: DebateLaunchOptions;
+  agents: Parameters<typeof createDebate>[3];
+  roles: Array<{
+    role: 'proposition' | 'opposition' | 'judge';
+    providerLabel: string;
+    modelLabel: string;
+    agentLabel: string;
+  }>;
+};
+
 type MaterialTab = 'quickstart' | 'education' | 'local';
 const MATERIAL_TABS: readonly MaterialTab[] = ['quickstart', 'education', 'local'];
 
@@ -413,13 +426,13 @@ export function InputView() {
   const clearLaunchError = useCallback(() => {
     setLaunchError(null);
   }, []);
-  const setLaunchFailure = useCallback((error: unknown) => {
+  const setLaunchFailure = useCallback((error: unknown, fallbackMessage?: string) => {
     if (getApiErrorCode(error) === 'MODEL_PROFILE_CHANGED') {
       setProfileRefreshRequired(true);
       setLaunchError(t('home.launch_profile_changed'));
       return;
     }
-    setLaunchError(getLocalizedApiErrorMessage(error, t, t('common.api_errors.simulation_start_failed')));
+    setLaunchError(getLocalizedApiErrorMessage(error, t, fallbackMessage ?? t('common.api_errors.simulation_start_failed')));
   }, [t]);
   const [pendingLaunch, setPendingLaunch] = useState<PendingSimulationLaunch | null>(null);
   // FE-5: 4 new source toggles (independent state per family)
@@ -530,11 +543,14 @@ export function InputView() {
   const submitErrorCode = useSimulationStore((s) => s.errorCode);
   const reset = useSimulationStore((s) => s.reset);
   const [confirmDialogData, setConfirmDialogData] = useState<PendingSimulationLaunch | null>(null);
+  const [pendingDebateLaunch, setPendingDebateLaunch] = useState<PendingDebateLaunch | null>(null);
   const [weeklyTrackDialogOpen, setWeeklyTrackDialogOpen] = useState(false);
   const [campaignSheetOpen, setCampaignSheetOpen] = useState(false);
   const isComposingRef = useRef(false);
   const launchInFlightRef = useRef(false);
   const debateLaunchIntentRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const debateSubmittingRef = useRef(false);
+  const debateLaunchButtonRef = useRef<HTMLButtonElement>(null);
   const launchInFlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const launchAbortControllerRef = useRef<AbortController | null>(null);
   const launchAbortReasonRef = useRef<WeakMap<AbortSignal, 'timeout'>>(new WeakMap());
@@ -1777,18 +1793,17 @@ export function InputView() {
     }
   };
 
-  const launchDebate = async ({
-    nextQuestion,
-  }: {
-    nextQuestion: string;
-  }) => {
-    const trimmed = normalizeScenarioQuestionForLaunch(nextQuestion);
-    if (!trimmed || isSubmitting) return;
+  const requestDebateLaunch = () => {
+    if (isComposingRef.current || isImeComposing) {
+      setLaunchError(t('home.disabled_reason_ime'));
+      return;
+    }
+    const sourceQuestion = getCurrentQuestionInputValue();
+    const trimmed = normalizeScenarioQuestionForLaunch(sourceQuestion);
+    if (!trimmed || isSubmitting || launchInFlightRef.current || debateSubmittingRef.current) return;
     if (debateLlmNotConfigured) return;
     clearLaunchError();
-    if (nextQuestion.trim() !== trimmed) {
-      setQuestion(trimmed);
-    }
+    if (question !== trimmed) setQuestion(trimmed);
     const byokValidation = suppressSharedDebateProvider
       ? { valid: true }
       : validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
@@ -1799,84 +1814,133 @@ export function InputView() {
       return;
     }
 
+    const serverMaxCustomAgents = caps?.custom_agents?.max_custom_agents;
+    const debateCustomAgentLimit = Math.min(
+      2,
+      customAgentsEnabled && typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
+        ? serverMaxCustomAgents
+        : 2,
+    );
+    const [propositionAgentId, oppositionAgentId] = getClampedCustomAgentIds(debateCustomAgentLimit);
+    // Debate role profiles own their provider bindings. Keep the shared home
+    // configuration intact for Simulation, but do not apply it as an explicit
+    // override to a role profile. An unchanged main-profile mirror is likewise
+    // server-owned and must not become a keyless global Debate override.
+    const resolvedLlmApiKey = suppressSharedDebateProvider
+      ? undefined
+      : llmApiKey.trim() || undefined;
+    const resolvedLlmBaseUrl = suppressSharedDebateProvider
+      ? undefined
+      : llmBaseUrl || undefined;
+    const resolvedLlmModel = suppressSharedDebateProvider
+      ? undefined
+      : llmModel || undefined;
+    const resolvedLlmRequestsPerMinute = suppressSharedDebateProvider
+      ? undefined
+      : Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined;
+    const resolvedLlmTokensPerMinute = suppressSharedDebateProvider
+      ? undefined
+      : Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined;
+    const roleProfileIds = [...new Set([
+      effectivePropositionProfileId, effectiveOppositionProfileId, effectiveJudgeProfileId,
+    ].filter(Boolean))];
+    const profileConfirmationTokens: Record<string, string> = {};
+    for (const profileId of roleProfileIds) {
+      const token = profiles.find((profile) => profile.id === profileId)?.confirmation_token;
+      if (!token || profileRefreshRequired || profilesRefreshing) {
+        setProfileRefreshRequired(true);
+        setLaunchError(t('home.launch_profile_unverified'));
+        return;
+      }
+      profileConfirmationTokens[profileId] = token;
+    }
+    const debateOptions: DebateLaunchOptions = {
+      llmApiKey: resolvedLlmApiKey,
+      llmBaseUrl: resolvedLlmBaseUrl,
+      llmModel: resolvedLlmModel,
+      llmRequestsPerMinute: resolvedLlmRequestsPerMinute,
+      llmTokensPerMinute: resolvedLlmTokensPerMinute,
+      reasoningEffort: reasoningEffort || undefined,
+      userId: apiUserId,
+      propositionModelProfileId: effectivePropositionProfileId || undefined,
+      oppositionModelProfileId: effectiveOppositionProfileId || undefined,
+      judgeModelProfileId: effectiveJudgeProfileId || undefined,
+      ...(roleProfileIds.length > 0 && { profileConfirmationTokens }),
+      language: normalizeLanguage(i18n.language),
+    };
+    const debateAgents = propositionAgentId ? {
+      proposition: propositionAgentId,
+      opposition: oppositionAgentId,
+    } : undefined;
+    // Keep an uncertain retry on the same server-side intent. This ephemeral
+    // fingerprint is never logged, exported, or persisted with credentials.
+    const fingerprint = JSON.stringify({ question: trimmed, options: debateOptions, agents: debateAgents });
+    if (debateLaunchIntentRef.current?.fingerprint !== fingerprint) {
+      debateLaunchIntentRef.current = { fingerprint, requestId: createCompatUuid() };
+    }
+    const selectedIdentities = useAgentStore.getState().identities;
+    const roleProfiles = [
+      ['proposition', effectivePropositionProfileId, propositionAgentId],
+      ['opposition', effectiveOppositionProfileId, oppositionAgentId],
+      ['judge', effectiveJudgeProfileId, undefined],
+    ] as const;
+    setPendingDebateLaunch({
+      question: trimmed,
+      options: { ...debateOptions, clientRequestId: debateLaunchIntentRef.current.requestId },
+      agents: debateAgents,
+      roles: roleProfiles.map(([role, profileId, agentId]) => {
+        const profile = profiles.find((candidate) => candidate.id === profileId);
+        return {
+          role,
+          providerLabel: profile?.name || (resolvedLlmApiKey || resolvedLlmBaseUrl || resolvedLlmModel
+            ? t('home.launch_provider_override') : t('home.launch_provider_server')),
+          modelLabel: profile?.model || resolvedLlmModel || caps?.llm_provider?.model || t('home.launch_model_unknown'),
+          agentLabel: agentId
+            ? selectedIdentities.find((identity) => identity.id === agentId)?.display_name || agentId
+            : t('debate.review_auto_agent'),
+        };
+      }),
+    });
+  };
+
+  const confirmDebateLaunch = async () => {
+    const launch = pendingDebateLaunch;
+    if (!launch || isSubmitting || launchInFlightRef.current || debateSubmittingRef.current) return;
+    if (launch.options.userId !== getSessionBoundUserId()) {
+      setPendingDebateLaunch(null);
+      setLaunchError(t('home.launch_owner_changed'));
+      return;
+    }
+    debateSubmittingRef.current = true;
     setIsSubmitting(true);
+    clearLaunchError();
     try {
-      const serverMaxCustomAgents = caps?.custom_agents?.max_custom_agents;
-      const debateCustomAgentLimit = Math.min(
-        2,
-        customAgentsEnabled && typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
-          ? serverMaxCustomAgents
-          : 2,
-      );
-      const [propositionAgentId, oppositionAgentId] = getClampedCustomAgentIds(debateCustomAgentLimit);
-      // Debate role profiles own their provider bindings. Keep the shared home
-      // configuration intact for Simulation, but do not apply it as an explicit
-      // override to a role profile. An unchanged main-profile mirror is likewise
-      // server-owned and must not become a keyless global Debate override.
-      const resolvedLlmApiKey = suppressSharedDebateProvider
-        ? undefined
-        : llmApiKey.trim() || undefined;
-      const resolvedLlmBaseUrl = suppressSharedDebateProvider
-        ? undefined
-        : llmBaseUrl || undefined;
-      const resolvedLlmModel = suppressSharedDebateProvider
-        ? undefined
-        : llmModel || undefined;
-      const resolvedLlmRequestsPerMinute = suppressSharedDebateProvider
-        ? undefined
-        : Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined;
-      const resolvedLlmTokensPerMinute = suppressSharedDebateProvider
-        ? undefined
-        : Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined;
-      const roleProfileIds = [...new Set([
-        effectivePropositionProfileId, effectiveOppositionProfileId, effectiveJudgeProfileId,
-      ].filter(Boolean))];
-      const profileConfirmationTokens: Record<string, string> = {};
-      for (const profileId of roleProfileIds) {
-        const token = profiles.find((profile) => profile.id === profileId)?.confirmation_token;
-        if (!token || profileRefreshRequired || profilesRefreshing) {
-          setProfileRefreshRequired(true);
-          setLaunchError(t('home.launch_profile_unverified'));
-          setIsSubmitting(false);
-          return;
-        }
-        profileConfirmationTokens[profileId] = token;
+      const debate = await createDebate(launch.question, undefined, launch.options, launch.agents);
+      if (launch.options.userId !== getSessionBoundUserId()) {
+        setPendingDebateLaunch(null);
+        setLaunchError(t('home.launch_owner_changed'));
+        return;
       }
-      const debateOptions = {
-        llmApiKey: resolvedLlmApiKey,
-        llmBaseUrl: resolvedLlmBaseUrl,
-        llmModel: resolvedLlmModel,
-        llmRequestsPerMinute: resolvedLlmRequestsPerMinute,
-        llmTokensPerMinute: resolvedLlmTokensPerMinute,
-        reasoningEffort: reasoningEffort || undefined,
-        userId: apiUserId,
-        propositionModelProfileId: effectivePropositionProfileId || undefined,
-        oppositionModelProfileId: effectiveOppositionProfileId || undefined,
-        judgeModelProfileId: effectiveJudgeProfileId || undefined,
-        ...(roleProfileIds.length > 0 && { profileConfirmationTokens }),
-        language: normalizeLanguage(i18n.language),
-      };
-      const debateAgents = propositionAgentId ? {
-        proposition: propositionAgentId,
-        opposition: oppositionAgentId,
-      } : undefined;
-      // Keep an uncertain retry on the same server-side intent. This ephemeral
-      // fingerprint is never logged, exported, or persisted with credentials.
-      const fingerprint = JSON.stringify({ question: trimmed, options: debateOptions, agents: debateAgents });
-      if (debateLaunchIntentRef.current?.fingerprint !== fingerprint) {
-        debateLaunchIntentRef.current = { fingerprint, requestId: createCompatUuid() };
-      }
-      const debate = await createDebate(trimmed, undefined, {
-        ...debateOptions,
-        clientRequestId: debateLaunchIntentRef.current.requestId,
-      }, debateAgents);
       debateLaunchIntentRef.current = null;
+      setPendingDebateLaunch(null);
       navigate(`/debate/${debate.id}`);
     } catch (err) {
-      console.error('[launchDebate] failed:', err);
-      setLaunchFailure(err);
+      console.error('[confirmDebateLaunch] failed:', err);
+      if (launch.options.userId !== getSessionBoundUserId()) {
+        setPendingDebateLaunch(null);
+        setLaunchError(t('home.launch_owner_changed'));
+      } else {
+        setLaunchFailure(err, t('debate.start_failed'));
+      }
+    } finally {
+      debateSubmittingRef.current = false;
       setIsSubmitting(false);
     }
+  };
+
+  const cancelDebateLaunch = () => {
+    if (debateSubmittingRef.current) return;
+    setPendingDebateLaunch(null);
   };
 
   const focusPreparedMaterial = useCallback(() => {
@@ -2137,6 +2201,7 @@ export function InputView() {
         setLlmApiKey('');
       }
       setConfirmDialogData(null);
+      setPendingDebateLaunch(null);
       setPendingLaunch(null);
       setProfileRefreshRequired(false);
       setLaunchError(t('home.launch_profile_refreshed'));
@@ -2406,7 +2471,7 @@ export function InputView() {
       />
       {llmNotConfigured && <LlmNotConfiguredBanner />}
       {/* Loading Overlay */}
-      {isSubmitting && (
+      {isSubmitting && !pendingDebateLaunch && (
         <div
           className="loading-overlay"
           role="status"
@@ -2538,13 +2603,18 @@ export function InputView() {
                   )}
                 </button>
                 <button
+                  ref={debateLaunchButtonRef}
                   className="btn btn-ghost btn--submit"
-                  onClick={() => void launchDebate({ nextQuestion: question })}
+                  onClick={requestDebateLaunch}
                   disabled={debateLaunchDisabled}
+                  aria-describedby="debate-launch-hint"
                 >
                   {t('debate.entry_cta')}
                 </button>
               </div>
+              <p className="input-view__debate-hint" id="debate-launch-hint">
+                {t('debate.review_structure')}
+              </p>
 
               {isSimulationBudgetBlocked && !isSubmitting && mainLaunchDisabledReasonKey !== 'home.byok_budget_blocked' && (
                 <p
@@ -2594,7 +2664,7 @@ export function InputView() {
               )}
 
               {/* 提交错误就地呈现区 */}
-              {launchError && !isSubmitting && (
+              {launchError && !isSubmitting && !pendingDebateLaunch && (
                 <div className="iv-hero__launch-error" role="alert">
                   <span className="iv-hero__alert-icon" aria-hidden="true">!</span>
                   <span>{launchError}</span>
@@ -2673,6 +2743,10 @@ export function InputView() {
               )}
             </div>
 
+            <div className="input-view__simulation-scope" id="simulation-controls-scope">
+              <strong>{t('home.simulation_controls_title')}</strong>
+              <p>{t('home.simulation_controls_note')}</p>
+            </div>
             {/* Round Count Slider */}
             <div className="rounds-selector">
               <span className="rounds-label">{t('home.rounds_label')}</span>
@@ -2681,6 +2755,7 @@ export function InputView() {
                   type="range"
                   className="rounds-slider"
                   aria-label={t('home.rounds_label')}
+                  aria-describedby="simulation-controls-scope"
                   min={3}
                   max={HOME_MAX_ROUNDS}
                     step={1}
@@ -2707,6 +2782,7 @@ export function InputView() {
                   type="range"
                   className="agents-slider"
                   aria-label={t('home.agents_label')}
+                  aria-describedby="simulation-controls-scope"
                   min={3}
                   max={HOME_MAX_AGENTS}
                     step={1}
@@ -3281,7 +3357,7 @@ export function InputView() {
                           <span className="mode-label">{t('home.reasoning_label')}</span>
                           <div className="mode-options">
                             {[
-                              { value: '', label: t('home.reasoning_off') },
+                              { value: '', label: t('home.reasoning_default') },
                               { value: 'low', label: t('home.reasoning_low') },
                               { value: 'medium', label: t('home.reasoning_medium') },
                               { value: 'high', label: t('home.reasoning_high') },
@@ -3965,7 +4041,6 @@ export function InputView() {
             ) : (
               <p className="input-view__submit-hint">{simulationEtaHint}</p>
             )}
-            <p className="input-view__submit-hint">{t('debate.entry_hint')}</p>
           </div>
           {submitError && !isSubmitting && (
             submitErrorCode && [
@@ -4008,6 +4083,83 @@ export function InputView() {
             }
           />
 
+
+          <AlertDialog
+            open={pendingDebateLaunch !== null}
+            onOpenChange={(open) => { if (!open) cancelDebateLaunch(); }}
+          >
+            <AlertDialogContent
+              className="confirm-launch"
+              overlayClassName="confirm-launch-backdrop"
+              onOverlayClick={cancelDebateLaunch}
+              role="dialog"
+              aria-modal="true"
+              aria-label={t('debate.review_title')}
+              onClick={(event) => event.stopPropagation()}
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                const trigger = debateLaunchButtonRef.current;
+                if (trigger && !trigger.disabled) trigger.focus();
+                else questionRef.current?.focus();
+              }}
+            >
+              <AlertDialogHeader className="confirm-launch__header">
+                <AlertDialogTitle asChild><h3>{t('debate.review_title')}</h3></AlertDialogTitle>
+              </AlertDialogHeader>
+              <div className="confirm-launch__body">
+                <p className="confirm-launch__question">{pendingDebateLaunch?.question}</p>
+                <AlertDialogDescription className="confirm-launch__settings">
+                  {t('debate.review_structure')}
+                </AlertDialogDescription>
+                <dl className="confirm-launch__summary">
+                  {pendingDebateLaunch?.roles.map((role) => (
+                    <div key={role.role} className="confirm-launch__debate-role">
+                      <dt>{t(`debate.side_${role.role}`)}</dt>
+                      <dd data-testid={`debate-review-${role.role}`}>
+                        <span>{role.agentLabel}</span>
+                        <span>{role.providerLabel} · {role.modelLabel}</span>
+                      </dd>
+                    </div>
+                  ))}
+                  <div>
+                    <dt>{t('home.reasoning_label')}</dt>
+                    <dd data-testid="debate-review-effort">{pendingDebateLaunch?.options.reasoningEffort
+                      ? t(`home.reasoning_${pendingDebateLaunch.options.reasoningEffort}`)
+                      : t('home.reasoning_default')}</dd>
+                  </div>
+                </dl>
+                <p className="confirm-launch__note">{t('home.simulation_controls_note')}</p>
+                <p className="confirm-launch__note">{t('debate.review_extra_work')}</p>
+                <p className="confirm-launch__cost">{t('debate.review_cost_unknown')}</p>
+                {pendingDebateLaunch && launchError && !isSubmitting && (
+                  <div role="alert" className="iv-hero__launch-error">
+                    <span>{launchError}</span>
+                    {profileRefreshRequired && (
+                      <button type="button" disabled={profilesRefreshing} onClick={() => void refreshLaunchProfiles()}>
+                        {t(profilesRefreshing ? 'home.launch_profile_refreshing' : 'home.launch_profile_refresh')}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+              <AlertDialogFooter className="confirm-launch__footer">
+                <AlertDialogCancel className="btn btn-ghost" disabled={isSubmitting} onClick={cancelDebateLaunch}>
+                  {t('common.cancel')}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  className="btn btn-primary"
+                  disabled={isSubmitting || profileRefreshRequired || profilesRefreshing}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void confirmDebateLaunch();
+                  }}
+                  autoFocus
+                >
+                  {t(isSubmitting ? 'debate.review_starting' : 'debate.review_start')}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
 
           <AlertDialog
             open={!!confirmDialogData}

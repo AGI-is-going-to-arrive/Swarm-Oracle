@@ -212,7 +212,9 @@ export function AgentWorkshopView() {
       // library's retry surface and must not offer to create a duplicate.
       await refreshIdentities(userId).catch(() => undefined);
       if (getSessionBoundUserId() !== userId) return;
-      navigate('/agents');
+      navigate('/agents', isEditMode && editId
+        ? { state: { focusAgentId: editId, focusOwnerId: userId } }
+        : undefined);
     } catch (err) {
       setError({ kind: 'save', code: getApiErrorCode(err), status: getApiErrorStatus(err) });
     } finally {

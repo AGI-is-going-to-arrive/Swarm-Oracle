@@ -315,6 +315,40 @@ class TestPagination:
         returned = {n["branch_id"] for n in resp.json()["nodes"]}
         assert returned == set(children)
 
+    def test_cursor_from_another_root_is_rejected(self, client):
+        engine = get_engine()
+        sid, root_bid, _aid, children = _seed_scenario_with_lineage(
+            engine, branch_count=3,
+        )
+        other_root = _seed_branch(engine, sid, title="other-root")
+        _seed_branch(
+            engine, sid, replay_kind="counterfactual", replay_source_branch_id=other_root,
+        )
+
+        response = client.get(
+            f"/api/scenario/{sid}/replay-trace",
+            params={"root_branch_id": other_root, "after": children[0]},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "REPLAY_TRACE_CURSOR_INVALID"
+        valid_response = client.get(
+            f"/api/scenario/{sid}/replay-trace",
+            params={"root_branch_id": root_bid, "after": sorted(children)[0]},
+        )
+        assert valid_response.status_code == 200
+        assert [row["branch_id"] for row in valid_response.json()["nodes"]] == sorted(children)[1:]
+
+    def test_non_replay_branch_cannot_be_a_replay_cursor(self, client):
+        sid, root_bid, *_ = _seed_scenario_with_lineage(get_engine(), branch_count=2)
+
+        response = client.get(
+            f"/api/scenario/{sid}/replay-trace", params={"after": root_bid},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "REPLAY_TRACE_CURSOR_INVALID"
+
 
 class TestTargetLineage:
     def test_target_orders_root_to_leaf_by_lineage_not_uuid(self, client):

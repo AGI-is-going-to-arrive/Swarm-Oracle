@@ -347,18 +347,35 @@ export function CompareDigestView() {
     ? Math.round(activeDiff.divergence_score * 100)
     : null;
 
-  const branchPanels = useMemo(() => ({
-    a: {
-      id: branchA,
-      title: branchById.get(branchA)?.title ?? t('compare.branch_a_label', 'Branch A (Original)'),
-      probability: branchById.get(branchA)?.probability ?? null,
-    },
-    b: {
-      id: branchB,
-      title: branchById.get(branchB)?.title ?? t('compare.branch_b_label', 'Branch B (Counterfactual)'),
-      probability: branchById.get(branchB)?.probability ?? null,
-    },
-  }), [branchA, branchB, branchById, t]);
+  const branchPanels = useMemo(() => {
+    const a = branchById.get(branchA);
+    const b = branchById.get(branchB);
+    const aLinksB = Boolean(a && b && a.replay_source_branch_id === b.id);
+    const bLinksA = Boolean(a && b && b.replay_source_branch_id === a.id);
+    const aReplaysB = aLinksB && a?.replay_kind === 'counterfactual';
+    const bReplaysA = bLinksA && b?.replay_kind === 'counterfactual';
+    const hasProvenRoles = branchA !== branchB && (aReplaysB || bReplaysA)
+      && !(aLinksB && bLinksA);
+    const name = (title: string, counterfactual: boolean): string => {
+      if (!hasProvenRoles) return title;
+      return t(counterfactual ? 'compare.branch_counterfactual_name' : 'compare.branch_original_name', {
+        branch: title,
+        defaultValue: counterfactual ? '{{branch}} (Counterfactual)' : '{{branch}} (Original)',
+      });
+    };
+    return {
+      a: {
+        id: branchA,
+        title: name(a?.title?.trim() ? a.title : t('compare.branch_a_label', 'Branch A'), aReplaysB),
+        probability: a?.probability ?? null,
+      },
+      b: {
+        id: branchB,
+        title: name(b?.title?.trim() ? b.title : t('compare.branch_b_label', 'Branch B'), bReplaysA),
+        probability: b?.probability ?? null,
+      },
+    };
+  }, [branchA, branchB, branchById, t]);
 
   const roundMarkers = useMemo(
     () => availableRounds.map((round) => ({
@@ -987,7 +1004,7 @@ export function CompareDigestView() {
                     ) : (
                       <div className="compare-round-card__grid">
                         <section>
-                          <span>{t('compare.branch_a_label', 'Branch A (Original)')}</span>
+                          <span>{branchPanels.a.title}</span>
                           <div className="compare-round-card__messages">
                             {round.branch_a_messages?.map((msg, idx) => {
                               const matchingMsg = round.branch_b_messages?.[idx];
@@ -1023,7 +1040,7 @@ export function CompareDigestView() {
                           </div>
                         </section>
                         <section>
-                          <span>{t('compare.branch_b_label', 'Branch B (Counterfactual)')}</span>
+                          <span>{branchPanels.b.title}</span>
                           <div className="compare-round-card__messages">
                             {round.branch_b_messages?.map((msg, idx) => {
                               const matchingMsg = round.branch_a_messages?.[idx];

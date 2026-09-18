@@ -2708,7 +2708,7 @@ describe('ResultView campaign summary', () => {
       );
     });
 
-    const compareEntry = await screen.findByRole('link', { name: /result.next_replay_different/ });
+    const compareEntry = await screen.findByRole('link', { name: /result.compare_existing_title/ });
     expect(compareEntry).toHaveAttribute(
       'href',
       '/result/scenario-1/compare?branch_a=branch-2&branch_b=branch-1',
@@ -4946,7 +4946,7 @@ describe('ResultView explore deeper bridge', () => {
     const replayEntry = within(bridge).getByText('result.next_replay_trace').closest('[role="link"]');
     expect(replayEntry).toHaveAttribute('aria-disabled', 'true');
     expect(replayEntry).toHaveTextContent('result.bridge_replay_data_unavailable');
-    const compareEntry = within(bridge).getByText('result.next_replay_different').closest('a,[role="link"]');
+    const compareEntry = within(bridge).getByText('result.compare_existing_title').closest('a,[role="link"]');
     expect(compareEntry).toHaveAttribute('aria-disabled', 'true');
     expect(compareEntry).toHaveTextContent('result.bridge_not_enabled');
     expect(within(bridge).getByRole('link', { name: /result.bridge_full_report_generate_title/ }))
@@ -5651,7 +5651,7 @@ describe('ResultView explore deeper bridge', () => {
       </MemoryRouter>,
     );
 
-    const compareEntry = await screen.findByRole('link', { name: /result.next_replay_different/ });
+    const compareEntry = await screen.findByRole('link', { name: /result.compare_existing_title/ });
     expect(compareEntry).toHaveAttribute('aria-disabled', 'true');
     expect(compareEntry).toHaveTextContent('result.bridge_single_branch');
   });
@@ -7046,6 +7046,42 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
     expect(await screen.findByRole('heading', { name: 'result.next_steps_heading' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: /result\.hooks\.title/ })).toBeNull();
     expect(screen.queryByText('result.agents')).toBeNull();
+  });
+
+  it('groups next steps by task and keeps extra tools collapsed in Reader mode', async () => {
+    renderResult();
+    const bridge = (await screen.findByRole('heading', { name: 'result.next_steps_heading' }))
+      .closest('section') as HTMLElement;
+    expect(within(bridge).getByRole('region', { name: 'result.task_verify' })).toBeInTheDocument();
+    expect(within(bridge).getByRole('region', { name: 'result.task_ask' })).toBeInTheDocument();
+    expect(within(bridge).getByRole('region', { name: 'result.task_change' })).toBeInTheDocument();
+    const disclosure = within(bridge).getByText('result.more_analysis_tools').closest('details');
+    expect(disclosure).not.toHaveAttribute('open');
+    await userEvent.click(within(bridge).getByText('result.more_analysis_tools'));
+    expect(disclosure).toHaveAttribute('open');
+  });
+
+  it('opens and focuses the rewrite editor directly from Reader mode', async () => {
+    setMockCapabilities({ ...getMockCapabilities(), counterfactual_replay: { enabled: true } });
+    const previousScroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    const scroll = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+    try {
+      renderResult();
+      const button = await screen.findByRole('button', { name: /result.change_editor_title/ });
+      expect(button).toBeEnabled();
+      expect(document.getElementById('result-counterfactual')).toBeNull();
+      await userEvent.click(button);
+      const editor = await screen.findByRole('region', { name: 'result.change_editor_title' });
+      expect(editor).toHaveAttribute('data-scenario-id', 'scenario-1');
+      expect(within(editor).getByText('counterfactual.title')).toBeInTheDocument();
+      await waitFor(() => expect(editor).toHaveFocus());
+      expect(scroll).toHaveBeenCalled();
+      expect(useUIPreferencesStore.getState().resultViewMode).toBe('workbench');
+    } finally {
+      if (previousScroll) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', previousScroll);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+    }
   });
 
   it('exposes direct graph and graph-workbench links from the reader header', async () => {

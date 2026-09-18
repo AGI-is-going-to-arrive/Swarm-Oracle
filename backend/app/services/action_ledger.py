@@ -753,6 +753,7 @@ def _project_latest_delta(
         return None
 
     sources: list[dict[str, Any]] = []
+    source_keys: set[tuple[str, int]] = set()
     receipt_applied_deltas: list[object] = []
     receipt_operations: set[str] = set()
     for source in raw_sources:
@@ -783,6 +784,10 @@ def _project_latest_delta(
             or receipt.get("state_revision_after") != state_revision_after
         ):
             return None
+        source_key = (action_id, proposal_index)
+        if source_key in source_keys:
+            return None
+        source_keys.add(source_key)
         receipt_applied_deltas.append(receipt.get("applied_delta"))
         receipt_operations.add(str(receipt.get("operation") or ""))
         sources.append(
@@ -807,12 +812,25 @@ def _project_latest_delta(
     source_rule_ids = sorted({str(source["rule_id"]) for source in sources})
     if raw_rule_ids != source_rule_ids:
         return None
+    if variable.semantic_role == "commitment_state" and receipt_operations != {"set_if_expected"}:
+        return None
     aggregate_applied_delta = raw_delta.get("applied_delta")
     if aggregate_applied_delta is None:
         if any(value is not None for value in receipt_applied_deltas):
             return None
     elif receipt_operations == {"set_if_expected"}:
-        if any(value != aggregate_applied_delta for value in receipt_applied_deltas):
+        if variable.semantic_role == "commitment_state":
+            # Consensus adopts one target: the first stable source owns its
+            # numeric delta and the remaining supporters contribute canonical
+            # zero. This attribution conserves the one aggregate change.
+            zero_delta = format(Decimal(0), ".0f" if variable.scale == 0 else f".{variable.scale}f")
+            for index, source in enumerate(sources):
+                receipt = verified_receipts[(source["action_id"], source["proposal_index"])]
+                expected = aggregate_applied_delta if index == 0 else zero_delta
+                if receipt.get("applied_delta") != expected:
+                    return None
+        elif any(value != aggregate_applied_delta for value in receipt_applied_deltas):
+            # Ordinary resource sets retain their existing atomic-set receipts.
             return None
     elif receipt_operations and receipt_operations.issubset(
         {
@@ -1160,6 +1178,83 @@ def _variable_json(variable: DomainVariableV1) -> dict[str, Any]:
         "enum_values": list(variable.enum_values),
         "initial_value": variable.initial_value,
     }
+
+
+def project_report_domain_context_v1(
+    session: Session,
+    *,
+    scenario: Scenario,
+    branch_id: str,
+    as_of_round: int,
+) -> dict[str, Any] | None:
+    """Expose bounded, replay-validated state and receipts to report authors.
+
+    Message support does not verify a narrative's adopted/executed value. The
+    caller must retain the unverified consistency boundary even when replay is
+    valid. An incomplete tail cannot silently project an earlier state as final.
+    """
+    parsed = scenario.parsed_context
+    if not isinstance(parsed, Mapping) or "domain_world_v1" not in parsed:
+        return None
+    config = _domain_config(parsed)
+    if config.status != "active" and config.reason_code == "not_generated":
+        return None
+    result: dict[str, Any] = {
+        "status": "unavailable",
+        "branch_id": branch_id,
+        "schema_hash": config.schema_hash,
+        "as_of_round": None,
+        "state_revision": None,
+        "failure_code": config.failure_code or "DOMAIN_SCHEMA_UNAVAILABLE",
+        "epistemic_scope": "scenario_assumption",
+        "values": [],
+        "adjudications": [],
+        "adjudication_count": 0,
+        "adjudications_truncated": False,
+    }
+    if config.status != "active" or config.schema is None:
+        return result
+    history, failure_code = _branch_domain_history(
+        session,
+        scenario=scenario,
+        branch_id=branch_id,
+        config=config,
+        as_of_round=as_of_round,
+    )
+    if failure_code or not history or history[-1]["round_number"] != as_of_round:
+        result["failure_code"] = failure_code or "DOMAIN_ROUND_INCOMPLETE"
+        return result
+    latest = history[-1]
+    # Retain the most recent receipts, including rejected proposals, without
+    # serializing the unbounded replay history into the report or its prompt.
+    receipts: list[dict[str, Any]] = []
+    count = 0
+    for projection in history:
+        for action_receipts in projection["receipts_by_action"].values():
+            count += len(action_receipts)
+            receipts.extend(action_receipts)
+            receipts = receipts[-32:]
+    result.update({
+        "status": "unverified",
+        "as_of_round": latest["round_number"],
+        "state_revision": latest["state_revision"],
+        "failure_code": None,
+        "values": [
+            {
+                "variable_id": variable.variable_id,
+                "label_en": variable.label_en,
+                "label_zh": variable.label_zh,
+                "semantic_role": variable.semantic_role,
+                "unit": variable.unit,
+                "value": latest["state"][variable.variable_id],
+            }
+            for variable in config.schema.variables
+        ],
+        "adjudications": receipts,
+        "adjudication_count": count,
+        "adjudications_truncated": count > len(receipts),
+    })
+    return result
 
 
 def _domain_unavailable_envelope(config: DomainWorldConfigV1) -> dict[str, Any]:
@@ -1549,45 +1644,6 @@ def _summary_value(value: object) -> str:
     return str(value)
 
 
-def _eligible_related_claim_ids(
-    full_report: object,
-    *,
-    branch_id: str,
-    published_source_action_ids: list[str],
-) -> list[str]:
-    if (
-        not isinstance(full_report, Mapping)
-        or full_report.get("status") not in {"complete", "partial"}
-    ):
-        return []
-    claims = full_report.get("claims")
-    if not isinstance(claims, list):
-        return []
-    published = set(published_source_action_ids)
-    eligible: list[str] = []
-    seen: set[str] = set()
-    for claim in claims:
-        if not isinstance(claim, Mapping) or claim.get("branch_id") != branch_id:
-            continue
-        raw_claim_id = claim.get("claim_id")
-        claim_id = raw_claim_id if type(raw_claim_id) is str else ""
-        action_ids = claim.get("action_ids")
-        if (
-            not claim_id.strip()
-            or claim_id in seen
-            or not isinstance(action_ids, list)
-            or not published.intersection(
-                action_id
-                for action_id in action_ids
-                if type(action_id) is str and action_id.strip()
-            )
-        ):
-            continue
-        seen.add(claim_id)
-        eligible.append(claim_id)
-    return eligible
-
-
 def _refs_with_metadata(values: list[str], *, cap: int, prefix: str) -> dict[str, Any]:
     retained = values[:cap]
     return {
@@ -1626,12 +1682,11 @@ def _world_outcome_for_variable(
         rule_first[rule_id] = min(rule_first.get(rule_id, rule_key), rule_key)
     action_ids = sorted(action_first, key=action_first.__getitem__)
     rule_ids = sorted(rule_first, key=rule_first.__getitem__)
-    published_action_ids = action_ids[:_DOMAIN_ACTION_REF_LIMIT]
-    claim_ids = _eligible_related_claim_ids(
-        full_report,
-        branch_id=branch_id,
-        published_source_action_ids=published_action_ids,
-    )
+    # Claim currently verifies message provenance, not a structured variable,
+    # unit and final-value assertion. Even strong quotes sharing every action
+    # cannot corroborate an aggregate value. Keep links empty until that proof
+    # exists instead of endorsing arbitrary action-related narrative.
+    claim_ids: list[str] = []
     initial_text = _summary_value(variable.initial_value)
     final_text = _summary_value(final_value)
     outcome = {

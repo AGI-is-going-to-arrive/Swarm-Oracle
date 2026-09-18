@@ -88,6 +88,7 @@ export const TYPE_LABEL_I18N: Record<string, [string, string]> = {
   round: ['causal.type_round', 'Round'],
   outcome: ['causal.type_outcome', 'Outcome'],
   verdict: ['causal.type_verdict', 'Verdict'],
+  counterfactual: ['causal.type_counterfactual', 'Counterfactual'],
   // Argument types
   claim: ['argument.claim', 'Claim'],
   evidence: ['argument.evidence', 'Evidence'],

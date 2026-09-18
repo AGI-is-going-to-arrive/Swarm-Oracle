@@ -240,6 +240,7 @@ export function PersonalJournalView() {
         if (requestSeq === fetchSeqRef.current) {
           activeFetchControllerRef.current = null;
           setLoading(false);
+          setRefreshing(false);
         }
       }
     },
@@ -452,22 +453,25 @@ export function PersonalJournalView() {
       }
       setSubmitting(true);
       setError(null);
+      let savedEntry: JournalEntry;
       try {
-        await createJournalEntry({
+        savedEntry = await createJournalEntry({
           question: form.question.trim(),
           predicted_probability: probability,
           scenario_id: form.scenarioId.trim() || null,
         });
-        setForm(INITIAL_FORM);
-        setRefreshing(true);
-        await fetchAll();
       } catch (err) {
         logUnexpectedJournalError('Create entry', err);
         setError(t('journal.form.create_failed', 'Could not log forecast. Please retry.'));
+        return;
       } finally {
         setSubmitting(false);
-        setRefreshing(false);
       }
+      setEntries((current) => [savedEntry, ...current.filter((entry) => entry.id !== savedEntry.id)]);
+      setForm(INITIAL_FORM);
+      setLoading(false);
+      setRefreshing(true);
+      void fetchAll();
     },
     [fetchAll, form, t],
   );
@@ -495,11 +499,7 @@ export function PersonalJournalView() {
 
   const handleRetryLoad = useCallback(async () => {
     setRefreshing(true);
-    try {
-      await fetchAll();
-    } finally {
-      setRefreshing(false);
-    }
+    await fetchAll();
   }, [fetchAll]);
 
   if (capLoading) {

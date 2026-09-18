@@ -1450,3 +1450,60 @@ describe('ReplayView — HC-11 contract (no replayCodec import)', () => {
     expect(src).not.toMatch(/require\s*\(\s*['"][^'"\n]*replayCodec/);
   });
 });
+
+
+describe('ReplayView — scenario speaker names', () => {
+  beforeEach(() => {
+    mockedCap.mockReturnValue({ loading: false, enabled: true, capabilities: null });
+  });
+
+  const agentId = '01234567-speaker-id';
+  function speakerGraph(name?: string) {
+    return {
+      id: 'speaker-graph',
+      nodes: [{
+        id: 'speaker-message', key: 'speaker-message', type: 'stance', round: 0,
+        label: 'Saved statement',
+        payload: { agent_id: agentId, agent_name: name, content: 'Saved statement', branch_id: 'b1' },
+      }],
+      edges: [], available_branches: ['b1'],
+    };
+  }
+
+  it.each([undefined, '', 'Archived speaker'])(
+    'joins scenario names into both queue and transcript, preserving graph name %s',
+    async (graphName) => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/replay-trace')) return jsonResponse({ nodes: [], next_cursor: null });
+        if (url.includes('/causal-graph')) return jsonResponse(speakerGraph(graphName));
+        return jsonResponse({ id: 'names', branches: [], agents: [{ id: agentId, name: '  抄写员 / Scribe  ' }] });
+      });
+      renderAt('/replay/names');
+      const expected = graphName || '抄写员 / Scribe';
+      expect(await screen.findByTestId(`replay-agent-queue-${agentId}`)).toHaveTextContent(expected);
+      expect(screen.getByRole('log')).toHaveTextContent(expected);
+      expect(screen.getByRole('log')).not.toHaveTextContent('01234567');
+    },
+  );
+
+  it('drops the old scenario name map when a new scope cannot load scenario metadata', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) return jsonResponse({ nodes: [], next_cursor: null });
+      if (url.includes('/causal-graph')) return jsonResponse(speakerGraph());
+      if (url.endsWith('/scenario/named')) {
+        return jsonResponse({ id: 'named', branches: [], agents: [{ id: agentId, name: 'Old speaker' }] });
+      }
+      return jsonResponse({}, 404);
+    });
+    renderAt('/replay/named');
+    expect(await screen.findByTestId(`replay-agent-queue-${agentId}`)).toHaveTextContent('Old speaker');
+    await act(async () => { navigateForTest?.('/replay/unavailable'); });
+    await waitFor(() => {
+      expect(screen.getByTestId(`replay-agent-queue-${agentId}`)).toHaveTextContent(agentId);
+    });
+    expect(screen.getByRole('log')).toHaveTextContent('01234567');
+    expect(screen.queryByText('Old speaker')).not.toBeInTheDocument();
+  });
+});

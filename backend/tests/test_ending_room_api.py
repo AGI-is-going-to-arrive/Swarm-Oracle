@@ -512,26 +512,37 @@ def test_roundtable_phase_insight_llm_scope_keeps_room_profile_overrides(client,
         assert call["model"] == "roundtable-profile-model"
 
 
-def test_oracle_no_effort_retry_scope_keeps_runtime_overrides(monkeypatch):
+@pytest.mark.parametrize("explicit_effort", [None, "high"])
+def test_oracle_plain_text_retry_keeps_effort_policy_and_runtime_overrides(
+    monkeypatch, explicit_effort,
+):
     import app.services.ending_room_service as ending_room_service
     import app.services.ending_room_service._content as content
     from app.config import settings
+    from app.services.llm_client import resolve_reasoning_effort
 
     monkeypatch.setattr(settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
     scopes: list[dict] = []
+    calls: list[dict] = []
+    original_scope = content.llm_request_scope
+    retry_copy = "Plain text retry keeps the configured effort and profile runtime values."
 
     @contextmanager
     def _capture_scope(**kwargs):
         scopes.append(kwargs)
-        yield
+        with original_scope(**kwargs):
+            yield
 
-    async def _empty_json(*_args, **_kwargs):
+    async def _empty_json(*_args, **kwargs):
+        calls.append({"kind": "json", "argument": kwargs.get("reasoning_effort"),
+                      "effective": resolve_reasoning_effort()})
         return {"content": ""}
 
     async def _fake_llm_call(*_args, **kwargs):
-        if kwargs.get("reasoning_effort") is not None:
-            raise RuntimeError("400 unsupported parameter: reasoning_effort")
-        return "No effort retry keeps the profile scoped runtime override values."
+        calls.append({"kind": "text", "argument": kwargs.get("reasoning_effort"),
+                      "effective": resolve_reasoning_effort()})
+        return retry_copy
 
     monkeypatch.setattr(content, "llm_request_scope", _capture_scope)
     monkeypatch.setattr(ending_room_service, "llm_call_json", _empty_json)
@@ -559,6 +570,7 @@ def test_oracle_no_effort_retry_scope_keeps_runtime_overrides(monkeypatch):
         anchor_copy="The bridge stays open and the council keeps logistics visible.",
         purpose="oracle_test",
         llm_overrides={
+            "reasoning_effort": explicit_effort,
             "requests_per_minute": 13,
             "tokens_per_minute": 2600,
             "concurrency": 4,
@@ -567,34 +579,52 @@ def test_oracle_no_effort_retry_scope_keeps_runtime_overrides(monkeypatch):
         },
     ))
 
-    assert result
-    no_effort_scope = next(
-        scope for scope in scopes if scope["purpose"] == "oracle_test:no_effort_retry"
-    )
-    assert no_effort_scope["requests_per_minute"] == 13
-    assert no_effort_scope["tokens_per_minute"] == 2600
-    assert no_effort_scope["concurrency"] == 4
-    assert no_effort_scope["supports_structured_outputs_override"] is False
-    assert "supports_native_search_override" in no_effort_scope
-    assert no_effort_scope["supports_native_search_override"] is None
+    assert result == retry_copy
+    common_scope = {
+        "quota_key": None,
+        "reasoning_effort": explicit_effort or "low",
+        "requests_per_minute": 13,
+        "tokens_per_minute": 2600,
+        "concurrency": 4,
+        "supports_structured_outputs_override": False,
+        "supports_native_search_override": None,
+        "native_search_upstream_override": None,
+    }
+    assert scopes == [
+        {**common_scope, "purpose": purpose}
+        for purpose in ["oracle_test", "oracle_test:rewrite", "oracle_test:plain_text_retry"]
+    ]
+    assert calls == [
+        {"kind": kind, "argument": explicit_effort, "effective": explicit_effort or "low"}
+        for kind in ["json", "json", "text"]
+    ]
 
 
-def test_oracle_followup_stream_probe_threads_profile_runtime_overrides(monkeypatch):
+@pytest.mark.parametrize("explicit_effort", [None, "high"])
+def test_oracle_followup_stream_probe_threads_profile_runtime_overrides(
+    monkeypatch, explicit_effort,
+):
     import app.services.ending_room_service as ending_room_service
     import app.services.ending_room_service._content as content
     from app.config import settings
+    from app.services.llm_client import resolve_reasoning_effort
 
     monkeypatch.setattr(settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
     scopes: list[dict] = []
     probe_calls: list[dict] = []
+    probe_efforts: list[str | None] = []
+    original_scope = content.llm_request_scope
 
     @contextmanager
     def _capture_scope(**kwargs):
         scopes.append(kwargs)
-        yield
+        with original_scope(**kwargs):
+            yield
 
     async def _fake_probe(**kwargs):
         probe_calls.append(dict(kwargs))
+        probe_efforts.append(resolve_reasoning_effort())
         return {"supported": True}
 
     monkeypatch.setattr(content, "llm_request_scope", _capture_scope)
@@ -602,6 +632,7 @@ def test_oracle_followup_stream_probe_threads_profile_runtime_overrides(monkeypa
 
     supported = asyncio.run(content._oracle_followup_streaming_supported(
         llm_overrides={
+            "reasoning_effort": explicit_effort,
             "requests_per_minute": 17,
             "tokens_per_minute": 3400,
             "concurrency": 5,
@@ -615,6 +646,7 @@ def test_oracle_followup_stream_probe_threads_profile_runtime_overrides(monkeypa
     ))
 
     assert supported is True
+    assert probe_efforts == [explicit_effort or "low"]
     assert probe_calls == [{
         "model": "oracle-probe-model",
         "api_key": "sk-oracle-probe-profile",
@@ -623,6 +655,7 @@ def test_oracle_followup_stream_probe_threads_profile_runtime_overrides(monkeypa
     }]
     assert scopes == [{
         "quota_key": None,
+        "reasoning_effort": explicit_effort or "low",
         "purpose": "oracle_followup_stream_probe",
         "requests_per_minute": 17,
         "tokens_per_minute": 3400,

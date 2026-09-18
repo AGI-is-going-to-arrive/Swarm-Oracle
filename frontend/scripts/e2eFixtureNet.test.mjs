@@ -10,6 +10,7 @@ import {
   resolveApiFixture,
 } from "./e2eFixtureNet.mjs";
 import { __test__ as releaseSignoffTest } from "./release-signoff.mjs";
+import { __test__ as conversationTest } from "./e2e-node-conversation-live.mjs";
 
 test("fixture capabilities enable the You-vs-Oracle prediction surface", () => {
   const capabilities = createFixtureStore().capabilitiesFixture();
@@ -174,4 +175,95 @@ test("release-signoff executes its focused and WS contract tests", () => {
     releaseSignoffTest.scriptContractTests.includes("scripts/e2e-ws-contract-suite.test.mjs"),
     true,
   );
+});
+
+function conversationStartBody() {
+  return {
+    scenario_id: conversationTest.FIXTURE_SCENARIO_ID,
+    origin_node_id: conversationTest.NODE_ID,
+    origin_node_type: "event",
+    origin_branch_id: conversationTest.BRANCH_ID,
+    origin_round_number: 1,
+    first_user_content: "First question",
+  };
+}
+
+test("conversation suite rejects live mode and keeps mobile context options", () => {
+  assert.throws(() => conversationTest.assertOfflineMode({ SWARM_E2E_MODE: "live" }),
+    /explicit real SWARM_E2E_SCENARIO_ID/);
+  assert.throws(() => conversationTest.assertOfflineMode({
+    SWARM_E2E_MODE: "live", SWARM_E2E_SCENARIO_ID: "real-scenario",
+  }), /offline-only/);
+  const args = conversationTest.parseArgs(["node", "script", "full", "--browser", "webkit", "--headless"]);
+  const runs = conversationTest.buildSurfaceRuns(args);
+  assert.equal(runs.length, 2);
+  assert.equal(runs[1].context.isMobile, true);
+  assert.equal(runs[1].context.hasTouch, true);
+  assert.equal(runs[1].browser, "webkit");
+  assert.equal(conversationTest.TRIGGER_SOURCES.some(source => source.key === "argument_map"), false);
+});
+
+test("conversation fixture rejects mixed anchors, wrong methods and unplanned streams", () => {
+  const fixture = conversationTest.createConversationFixtureStore();
+  assert.equal(fixture.request({ method: "POST", pathname: "/api/conversation/start",
+    body: { ...conversationStartBody(), origin_round_number: 999 } }).status, 409);
+  assert.equal(fixture.threads.size, 0);
+  const start = fixture.request({ method: "POST", pathname: "/api/conversation/start", body: conversationStartBody() });
+  assert.equal(start.status, 200);
+  const path = `/api/conversation/${start.json.thread_id}`;
+  assert.equal(fixture.request({ method: "DELETE", pathname: path }).status, 409);
+  assert.equal(fixture.request({ method: "POST", pathname: `${path}/turn`,
+    body: { user_content: "First question" } }).status, 409);
+  assert.equal(fixture.violations.length, 3);
+});
+
+test("conversation fixture bootstrap and follow-up preserve two ordered pairs", () => {
+  const fixture = conversationTest.createConversationFixtureStore();
+  const start = fixture.request({ method: "POST", pathname: "/api/conversation/start", body: conversationStartBody() });
+  const pathname = `/api/conversation/${start.json.thread_id}`;
+  for (const question of ["First question", "Second question"]) {
+    fixture.plans.push({ question, kind: "complete", parts: [`Reply to ${question}`, "."] });
+    const response = fixture.request({ method: "POST", pathname: `${pathname}/turn`, body: { user_content: question } });
+    assert.equal(response.status, 200);
+    assert.ok(response.stream.events.some(frame => frame.delay > 0));
+    for (const frame of response.stream.events) fixture.record(frame);
+  }
+  const restored = fixture.request({ method: "GET", pathname }).json;
+  assert.deepEqual(restored.turns.map(turn => turn.sequence), [1, 2, 3, 4]);
+  assert.deepEqual(restored.turns.map(turn => turn.role), ["user", "assistant", "user", "assistant"]);
+  assert.deepEqual(restored.turns.map(turn => turn.status), ["done", "done", "done", "done"]);
+  assert.equal(restored.turns[3].content, "Reply to Second question.");
+  assert.equal(restored.active_turn_id, null);
+  assert.deepEqual(fixture.violations, []);
+});
+
+test("conversation fixture abort preserves prefix and rejects late stream data", () => {
+  const fixture = conversationTest.createConversationFixtureStore();
+  const start = fixture.request({ method: "POST", pathname: "/api/conversation/start", body: conversationStartBody() });
+  const pathname = `/api/conversation/${start.json.thread_id}`;
+  fixture.plans.push({ question: "First question", kind: "stop", parts: ["visible prefix", "late"] });
+  const response = fixture.request({ method: "POST", pathname: `${pathname}/turn`, body: { user_content: "First question" } });
+  fixture.record(response.stream.events[0]);
+  fixture.record(response.stream.events[1]);
+  assert.equal(fixture.request({ method: "DELETE", pathname: `${pathname}/active` }).json.aborted, true);
+  const restored = fixture.request({ method: "GET", pathname }).json;
+  assert.equal(restored.turns[1].content, "visible prefix");
+  assert.equal(restored.turns[1].status, "aborted");
+  fixture.record(response.stream.events[2]);
+  assert.equal(fixture.violations.length, 1);
+  assert.equal(fixture.request({ method: "GET", pathname }).json.turns[1].content, "visible prefix");
+});
+
+test("conversation fixture separates anonymous and signed-owner threads", () => {
+  const fixture = conversationTest.createConversationFixtureStore();
+  const anonymous = fixture.request({ method: "POST", pathname: "/api/conversation/start", body: conversationStartBody() }).json;
+  const ownerUserId = conversationTest.FIXTURE_OWNER_ID;
+  assert.equal(fixture.request({ method: "GET", pathname: `/api/conversation/${anonymous.thread_id}`, ownerUserId }).status, 404);
+  assert.deepEqual(fixture.request({ method: "GET", pathname: `/api/scenario/${conversationTest.FIXTURE_SCENARIO_ID}/conversations`, ownerUserId }).json.items, []);
+  const owned = fixture.request({ method: "POST", pathname: "/api/conversation/start", body: conversationStartBody(), ownerUserId }).json;
+  assert.equal(owned.owner_user_id, ownerUserId);
+  assert.notEqual(owned.thread_id, anonymous.thread_id);
+  const restored = fixture.request({ method: "GET", pathname: `/api/scenario/${conversationTest.FIXTURE_SCENARIO_ID}/conversations`, ownerUserId }).json;
+  assert.deepEqual(restored.items.map(thread => thread.thread_id), [owned.thread_id]);
+  assert.deepEqual(fixture.violations, []);
 });

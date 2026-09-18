@@ -5,17 +5,19 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 // ── Mocks ───────────────────────────────────────────────────
 
 vi.mock('./CausalGraphBoard', () => ({
-  default: (props: { scenarioId: string }) => (
-    <div data-testid="causal-board" data-scenario-id={props.scenarioId} />
+  default: (props: { scenarioId: string; inspectionActive?: boolean; onNodeClick?: (node: unknown) => void }) => (
+    <button data-testid="causal-board" data-scenario-id={props.scenarioId} data-inspection-active={props.inspectionActive} onClick={() => props.onNodeClick?.({})} />
   ),
 }));
 
 vi.mock('./KGGraphBoard', () => ({
-  default: (props: { scenarioId: string; resizeKey?: string }) => (
-    <div
+  default: (props: { scenarioId: string; resizeKey?: string; inspectionActive?: boolean; onNodeClick?: (node: unknown) => void }) => (
+    <button
       data-testid="kg-board"
       data-scenario-id={props.scenarioId}
       data-resize-key={props.resizeKey ?? ''}
+      data-inspection-active={props.inspectionActive}
+      onClick={() => props.onNodeClick?.({})}
     />
   ),
 }));
@@ -347,6 +349,33 @@ describe('GraphWorkbenchShell', () => {
     );
 
     expect(screen.getByTestId('kg-board')).toHaveAttribute('data-resize-key', 'workbench:kg');
+  });
+
+  it('operates the split separator with arrow, boundary and reset keys', () => {
+    renderShell({ mode: 'split' });
+    const divider = screen.getByTestId('workbench-divider');
+    fireEvent.keyDown(divider, { key: 'ArrowRight' });
+    expect(divider).toHaveAttribute('aria-valuenow', '55');
+    fireEvent.keyDown(divider, { key: 'ArrowLeft' });
+    expect(divider).toHaveAttribute('aria-valuenow', '50');
+    fireEvent.keyDown(divider, { key: 'Home' });
+    fireEvent.keyDown(divider, { key: 'ArrowLeft' });
+    expect(divider).toHaveAttribute('aria-valuenow', '20');
+    fireEvent.keyDown(divider, { key: 'End' });
+    fireEvent.keyDown(divider, { key: 'ArrowRight' });
+    expect(divider).toHaveAttribute('aria-valuenow', '80');
+    fireEvent.keyDown(divider, { key: 'Enter' });
+    expect(divider).toHaveAttribute('aria-valuenow', '50');
+  });
+
+  it('gives only the most recently selected graph ownership of inspection', () => {
+    renderShell({ mode: 'split' });
+    fireEvent.click(screen.getByTestId('causal-board'));
+    expect(screen.getByTestId('causal-board')).toHaveAttribute('data-inspection-active', 'true');
+    expect(screen.getByTestId('kg-board')).toHaveAttribute('data-inspection-active', 'false');
+    fireEvent.click(screen.getByTestId('kg-board'));
+    expect(screen.getByTestId('causal-board')).toHaveAttribute('data-inspection-active', 'false');
+    expect(screen.getByTestId('kg-board')).toHaveAttribute('data-inspection-active', 'true');
   });
 
   // ── W-2: tabpanel ARIA ─────────────────────────────────────

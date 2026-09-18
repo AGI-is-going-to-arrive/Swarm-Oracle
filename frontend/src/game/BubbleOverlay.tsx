@@ -40,6 +40,7 @@ const LINGER_MAX_MS = 4400;
 const TYPEWRITER_MS_PER_CHAR = 22;
 const INITIAL_TYPEWRITER_CHARS = 4;
 const DEFAULT_CANVAS_RECT: CanvasRect = { width: 800, height: 450 };
+const BUBBLE_STAGE_PADDING_PX = 8;
 
 const EMOTION_CLASS_NAMES = new Set(Object.keys(EMOTION_HALO_COLORS));
 
@@ -255,10 +256,32 @@ export function BubbleOverlay({ containerRef }: BubbleOverlayProps) {
         const cssX = metrics.offsetX + (position.x / canvasWidth) * metrics.width;
         const cssY = metrics.offsetY + (position.y / canvasHeight) * metrics.height;
         const lift = Math.max(34, (position.spriteH / canvasHeight) * metrics.height * 0.5 + 14);
+        const maxWidth = `${Math.max(0, metrics.width - BUBBLE_STAGE_PADDING_PX * 2)}px`;
+        if (element.style.maxInlineSize !== maxWidth) element.style.maxInlineSize = maxWidth;
+        const halfWidth = element.offsetWidth / 2;
+        const anchorX = Math.round(cssX);
+        const anchorY = Math.round(cssY);
+        const roundedLift = Math.round(lift);
+        const centerX = Math.max(
+          metrics.offsetX + BUBBLE_STAGE_PADDING_PX + halfWidth,
+          Math.min(
+            metrics.offsetX + metrics.width - BUBBLE_STAGE_PADDING_PX - halfWidth,
+            anchorX,
+          ),
+        );
+        const shiftY = Math.max(
+          0,
+          metrics.offsetY + BUBBLE_STAGE_PADDING_PX
+            - (anchorY - roundedLift - element.offsetHeight),
+        );
 
-        element.style.setProperty('--bubble-lift', `${Math.round(lift)}px`);
+        // Keep the sprite anchor in the first transform; only the readable
+        // bubble body shifts when its edges would leave the actual stage.
+        element.style.setProperty('--bubble-lift', `${roundedLift}px`);
+        element.style.setProperty('--bubble-shift-x', `${centerX - anchorX}px`);
+        element.style.setProperty('--bubble-shift-y', `${shiftY}px`);
         element.style.transform =
-          `translate3d(${Math.round(cssX)}px, ${Math.round(cssY)}px, 0) translate(-50%, calc(-100% - var(--bubble-lift)))`;
+          `translate3d(${anchorX}px, ${anchorY}px, 0) translate(calc(-50% + var(--bubble-shift-x)), calc(-100% - var(--bubble-lift) + var(--bubble-shift-y)))`;
         element.style.opacity = '1';
       }
     });

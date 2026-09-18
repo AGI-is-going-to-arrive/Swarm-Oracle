@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -5192,5 +5192,132 @@ describe('WorldlineRoundtableView tablet sidebar collapsible', () => {
     const summary = details!.querySelector('.worldline-roundtable-sidebar__summary');
     expect(summary).toBeTruthy();
     expect(summary!.textContent).toContain('rep');
+  });
+});
+
+
+describe('Roundtable copy feedback lifecycle', () => {
+  const feedbackSpies: Array<{ mockRestore: () => unknown }> = [];
+  beforeEach(() => {
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1', question: 'What broke first?', status: 'done', agents: [], language: 'en',
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1', question: 'What broke first?', status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'A', insight: 'A' },
+        { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'B', insight: 'B' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    for (const spy of feedbackSpies.splice(0)) spy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('replaces a repeated copy window and clears every feedback timer on unmount', async () => {
+    const view = renderRoundtableView();
+    await screen.findByText('The roundtable converged on a single hinge.');
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(window, 'setTimeout');
+    feedbackSpies.push(timeoutSpy);
+    const clearSpy = vi.spyOn(window, 'clearTimeout');
+    feedbackSpies.push(clearSpy);
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Copy summary' })[0]);
+    });
+    expect(screen.getAllByRole('button', { name: 'Summary copied' }).length).toBeGreaterThan(0);
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Summary copied' })[0]);
+    });
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(screen.getAllByRole('button', { name: 'Summary copied' }).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy replay' }));
+    });
+    const feedbackTimerIds = timeoutSpy.mock.calls.flatMap((call, index) => (
+      call[1] === 1800 ? [timeoutSpy.mock.results[index].value] : []
+    ));
+    expect(feedbackTimerIds).toHaveLength(3);
+    view.unmount();
+    for (const timerId of feedbackTimerIds) expect(clearSpy).toHaveBeenCalledWith(timerId);
+    await act(async () => { vi.advanceTimersByTime(1800); });
+  });
+
+  it('cleans both permalink and local fallback feedback timers', async () => {
+    createReplayArtifactMock.mockRejectedValueOnce(new Error('offline'));
+    buildOracleReplayUrlMock.mockRejectedValueOnce(new Error('too large'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    feedbackSpies.push(warnSpy);
+    const view = renderRoundtableView();
+    await screen.findByText('The roundtable converged on a single hinge.');
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(window, 'setTimeout');
+    feedbackSpies.push(timeoutSpy);
+    const clearSpy = vi.spyOn(window, 'clearTimeout');
+    feedbackSpies.push(clearSpy);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy replay' }));
+    });
+    const feedbackTimerIds = timeoutSpy.mock.calls.flatMap((call, index) => (
+      call[1] === 1800 ? [timeoutSpy.mock.results[index].value] : []
+    ));
+    expect(feedbackTimerIds).toHaveLength(2);
+    view.unmount();
+    for (const timerId of feedbackTimerIds) expect(clearSpy).toHaveBeenCalledWith(timerId);
+    warnSpy.mockRestore();
+  });
+
+  it('ignores clipboard completion after unmount instead of recreating a timer', async () => {
+    let finishCopy!: () => void;
+    copyTextMock.mockReturnValueOnce(new Promise<void>((resolve) => { finishCopy = resolve; }));
+    const view = renderRoundtableView();
+    await screen.findByText('The roundtable converged on a single hinge.');
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(window, 'setTimeout');
+    feedbackSpies.push(timeoutSpy);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy summary' })[0]);
+    view.unmount();
+    await act(async () => { finishCopy(); });
+    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 1800)).toHaveLength(0);
+  });
+
+  it('ignores clipboard feedback from a replaced room scope', async () => {
+    let finishCopy!: () => void;
+    copyTextMock.mockReturnValueOnce(new Promise<void>((resolve) => { finishCopy = resolve; }));
+    const view = renderRoundtableView();
+    await screen.findByText('The roundtable converged on a single hinge.');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy summary' })[0]);
+    storeState.snapshot = { ...storeState.snapshot!, id: 'room-2' };
+    view.rerender(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes><Route path="/roundtable/:id" element={<WorldlineRoundtableView />} /></Routes>
+      </MemoryRouter>,
+    );
+    await act(async () => { finishCopy(); });
+    expect(screen.queryByRole('button', { name: 'Summary copied' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Copy summary' }).length).toBeGreaterThan(0);
+  });
+
+  it('does not copy or save an artifact whose request completes after unmount', async () => {
+    let finishArtifact!: (value: { id: string }) => void;
+    createReplayArtifactMock.mockReturnValueOnce(new Promise<{ id: string }>((resolve) => {
+      finishArtifact = resolve;
+    }));
+    const view = renderRoundtableView();
+    await screen.findByText('The roundtable converged on a single hinge.');
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy replay' }));
+    expect(createReplayArtifactMock).toHaveBeenCalledTimes(1);
+    view.unmount();
+    await act(async () => { finishArtifact({ id: 'late-artifact' }); });
+    expect(copyTextMock).not.toHaveBeenCalled();
+    expect(saveOracleReplayLocalCopyMock).not.toHaveBeenCalled();
   });
 });

@@ -60,6 +60,35 @@ def _owned_profile():
         return profile.id
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("requested", "expected"), [(None, "low"), ("medium", "medium"),
+                                                        ("none", "none")])
+async def test_create_freezes_effort_before_background_start(api, monkeypatch, requested, expected):
+    client, _scheduled = api
+    pending = []
+    background = AsyncMock()
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
+    monkeypatch.setattr(debate_api, "schedule_background_task", pending.append)
+    monkeypatch.setattr(debate_api, "run_debate_background", background)
+    monkeypatch.setattr(debate_api, "DEBATE_START_DELAY_SECONDS", 0)
+    body = {"question": "Should the fictional town run a weekend pilot?", "user_id": "owner"}
+    if requested is not None:
+        body["reasoning_effort"] = requested
+    try:
+        response = client.post("/api/debate", json=body)
+        assert response.status_code == 200
+        assert len(pending) == 1
+        monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "high")
+        await pending.pop()
+        assert background.await_args.kwargs["llm_overrides"]["reasoning_effort"] == expected
+        with Session(get_engine()) as session:
+            debate = session.get(Debate, response.json()["id"])
+            assert debate.breakdown_json["metadata"]["run_config"]["reasoning_effort"] == expected
+    finally:
+        for coroutine in pending:
+            coroutine.close()
+
+
 def _profile_source(api):
     client, _scheduled = api
     profile_id = _owned_profile()

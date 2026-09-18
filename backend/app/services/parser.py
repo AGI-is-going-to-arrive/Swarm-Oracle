@@ -185,9 +185,9 @@ _DOMAIN_WORLD_SCHEMA_PROMPT_EXAMPLE = {
             "enum_values": [],
         },
         {
-            "variable_id": "service_open",
-            "label_en": "Service open",
-            "label_zh": "服务开放",
+            "variable_id": "service_open_adopted",
+            "label_en": "Service opening decision adopted",
+            "label_zh": "已采纳服务开放决策",
             "value_type": "boolean",
             "semantic_role": "commitment_state",
             "unit": "unitless",
@@ -210,7 +210,7 @@ _DOMAIN_WORLD_SCHEMA_PROMPT_EXAMPLE = {
             "requested_maximum": "0",
             "preconditions": [
                 {
-                    "variable_id": "service_open",
+                    "variable_id": "service_open_adopted",
                     "comparator": "eq",
                     "value": True,
                     "unit": "unitless",
@@ -220,10 +220,11 @@ _DOMAIN_WORLD_SCHEMA_PROMPT_EXAMPLE = {
             "epistemic_scope": "scenario_assumption",
         },
         {
-            "rule_id": "close_service",
-            "variable_id": "service_open",
+            "rule_id": "adopt_service_closure",
+            "variable_id": "service_open_adopted",
             "action_type": "MUTE",
             "operation": "set_if_expected",
+            "adoption_policy": "unanimous_round_participants",
             "unit": "unitless",
             "constant_value": None,
             "requested_minimum": None,
@@ -269,12 +270,21 @@ First-response-only bounded domain schema:
   and initial_value is a JSON string equal to one enum member.
 - Each rule has exactly: rule_id, variable_id, action_type, operation, unit,
   constant_value, requested_minimum, requested_maximum, preconditions,
-  opportunity_mode, epistemic_scope. variable_id must name a declared variable; unit
+  opportunity_mode, epistemic_scope; commitment_state rules additionally require
+  adoption_policy: "unanimous_round_participants". variable_id must name a declared variable; unit
   must exactly equal that variable's unit. Every action_type is one of POST, COMMENT,
   REACTION, FOLLOW, MUTE, TREND, REFRESH, SEARCH.
 - operation is add_constant, add_requested, set_if_expected,
   saturating_add_constant, or saturating_add_requested. All add operations require an
   integer or decimal target; boolean and enum targets can only use set_if_expected.
+  Every commitment_state rule MUST use set_if_expected and the exact adoption_policy
+  "unanimous_round_participants". A commitment_state records an adopted simulated
+  decision, never operational execution. Labels and initial values must say what
+  decision was adopted; a preference or proposal is not adoption. The deterministic
+  reducer adopts only when ALL participating agents in the completed round submit
+  valid proposals for the same variable and target from the same N-1 state. IDLE,
+  a missing proposal, an invalid proposal, or disagreement blocks adoption. Never
+  claim unilateral authority or add a model-controlled authorization flag.
   For add_constant/saturating_add_constant, constant_value is a numeric string at the
   target scale and both requested bounds are null. For add_requested/
   saturating_add_requested, constant_value is null and both requested bounds are
@@ -1063,13 +1073,14 @@ def _build_parser_retry_kwargs(
     base_url: str | None,
     temperature: float | None,
     model: str | None,
+    reasoning_effort: str | None,
 ) -> dict:
     diversified_temperature = None
     if temperature is not None:
         diversified_temperature = min(2.0, max(0.0, round(temperature + 0.1, 2)))
 
     return {
-        "reasoning_effort": "medium",
+        "reasoning_effort": reasoning_effort,
         "api_key": api_key,
         "base_url": base_url,
         "temperature": diversified_temperature,
@@ -1186,6 +1197,7 @@ async def parse_question(
     base_url: str | None = None,
     temperature: float | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     world_context: dict | None = None,
     language: str | None = None,
 ) -> dict:
@@ -1239,7 +1251,7 @@ async def parse_question(
     logger.info("Parsing question: %s (hierarchical=%s)", question[:80], hierarchical)
     try:
         result = await llm_call_json_with_stream_fallback(
-            prompt, reasoning_effort="low",
+            prompt, reasoning_effort=reasoning_effort,
             api_key=api_key, base_url=base_url, temperature=temperature, model=model,
         )
         raw_domain_schema = (
@@ -1290,6 +1302,7 @@ async def parse_question(
                     base_url=base_url,
                     temperature=temperature,
                     model=model,
+                    reasoning_effort=reasoning_effort,
                 ),
             )
             if isinstance(retry_result, dict):

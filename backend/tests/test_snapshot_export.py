@@ -5938,6 +5938,210 @@ def test_runtime_sanitizer_orders_native_parent_before_lexical_child():
     assert trend["available"] is False
 
 
+async def _seed_snapshot_domain_reports(monkeypatch) -> dict[str, Any]:
+    from app.models import SimulationAction
+    from app.services.result_report import builder
+    from tests.test_action_ledger import _seed_unanimous_commitment_projection
+    from tests.test_result_report_builder import _mock_report_translation
+
+    seeded = _seed_unanimous_commitment_projection()
+    monkeypatch.setattr(builder, "llm_call_json", _mock_report_translation)
+    await builder.build_report(
+        seeded["scenario_id"], seeded["branch_id"], overrides=None, detail_level="brief",
+    )
+    source = await builder.build_report(
+        seeded["scenario_id"], seeded["branch_id"], overrides=None, target_language="zh",
+    )
+    full = source.model_copy(update={"detail_level": "full"})
+    builder._persist_report_payload(seeded["scenario_id"], full.model_dump(mode="json"))
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        scenario.question += " Review the saved decision."
+        session.add(scenario)
+        session.commit()
+    await builder.build_report(
+        seeded["scenario_id"], seeded["branch_id"], overrides=None, detail_level="brief",
+    )
+    await builder.build_report(
+        seeded["scenario_id"], seeded["branch_id"], overrides=None, target_language="zh",
+    )
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        source_ids = {seeded["scenario_id"], seeded["branch_id"], seeded["round_id"]}
+        for model in (Agent, SimulationAction):
+            source_ids.update(row.id for row in session.exec(
+                select(model).where(model.scenario_id == scenario.id),
+            ).all())
+        source_ids.update(row.id for row in session.exec(
+            select(AgentMessage).where(AgentMessage.round_id == seeded["round_id"]),
+        ).all())
+        blob = export_snapshot_zip(scenario.id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        exported = json.loads(archive.read("scenario.json"))["parsed_context"]
+    return {**seeded, "blob": blob, "source_ids": source_ids, "exported": exported}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_domain_report_and_history_rebind_only_imported_runtime(monkeypatch):
+    from app.services.action_ledger import project_report_domain_context_v1
+    from app.services.result_report.queries import (
+        REPORT_SCOPE_FINGERPRINT_KEY,
+        report_result_fingerprint,
+    )
+    from app.services.result_report.schema import DomainConsistency, validate_full_report_payload
+
+    seeded = await _seed_snapshot_domain_reports(monkeypatch)
+    exported = seeded["exported"]
+    assert exported[REPORT_SCOPE_FINGERPRINT_KEY].startswith("v1:")
+    assert set(exported["full_report_history"]) == {"report", "result_fingerprint"}
+    assert exported["full_report_history"]["result_fingerprint"] is None
+
+    def forge_report_receipt(payload):
+        report = payload["parsed_context"]["full_report"]
+        previous = DomainConsistency.model_validate(report["domain_consistency"])
+        forged = previous.model_copy(update={
+            "schema_hash": f"sha256:{'a' * 64}", "state_revision": f"sha256:{'b' * 64}",
+            "values": [previous.values[0].model_copy(update={"value": "3600"})],
+        })
+        report["domain_consistency"] = forged.model_dump(mode="json")
+        report["verdict"]["disclaimer"] = report["verdict"]["disclaimer"].replace(
+            previous.disclosure(report["language"]), forged.disclosure(report["language"]), 1,
+        )
+        for language, content in report["authored_content_i18n"].items():
+            content["disclaimer"] = content["disclaimer"].replace(
+                previous.disclosure(language), forged.disclosure(language), 1,
+            )
+        validate_full_report_payload(report)
+
+    blob = _rewrite_snapshot_scenario_json(seeded["blob"], forge_report_receipt)
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "domain-report-importer", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        context = imported.parsed_context
+        report = validate_full_report_payload(context["full_report"])
+        history = validate_full_report_payload(context["full_report_history"]["report"])
+        rebuilt = project_report_domain_context_v1(
+            session, scenario=imported, branch_id=report.target_branch_id, as_of_round=1,
+        )
+        imported_fingerprint = report_result_fingerprint(session, imported_id)
+
+    assert rebuilt is not None and rebuilt["status"] == "unverified"
+    assert report.domain_consistency is not None
+    assert report.domain_consistency.branch_id == report.target_branch_id
+    assert report.domain_consistency.values[0].value == "1800"
+    assert report.domain_consistency.schema_hash == rebuilt["schema_hash"]
+    assert report.domain_consistency.state_revision == rebuilt["state_revision"]
+    assert report.verdict.analytic_confidence.level == "low"
+    assert "1800 seconds" in report.verdict.disclaimer
+    assert "3600 seconds" not in report.verdict.disclaimer
+    assert report.authored_content_i18n["zh"].disclaimer.startswith(
+        report.domain_consistency.disclosure("zh"),
+    )
+    assert REPORT_SCOPE_FINGERPRINT_KEY not in context
+    assert context.get(REPORT_SCOPE_FINGERPRINT_KEY) != imported_fingerprint
+    assert context["snapshot_import"]["mode"] == "read_only"
+    assert context["full_report_history"]["result_fingerprint"] is None
+    assert history.domain_consistency is not None
+    assert history.domain_consistency.status == "unavailable"
+    assert history.domain_consistency.branch_id == history.target_branch_id
+    assert history.domain_consistency.schema_hash is None
+    assert history.domain_consistency.state_revision is None
+    assert history.domain_consistency.values == []
+    assert history.authored_content_i18n["zh"].disclaimer.startswith(
+        history.domain_consistency.disclosure("zh"),
+    )
+    for actual, original in (
+        (report, exported["full_report"]),
+        (history, exported["full_report_history"]["report"]),
+    ):
+        assert [item.quote for item in actual.evidence] == [
+            item["quote"] for item in original["evidence"]
+        ]
+        assert actual.authored_content_i18n["zh"].section_texts == (
+            validate_full_report_payload(original).authored_content_i18n["zh"].section_texts
+        )
+        serialized = json.dumps(actual.model_dump(mode="json"))
+        assert all(source_id not in serialized for source_id in seeded["source_ids"])
+
+
+@pytest.mark.asyncio
+async def test_snapshot_report_history_is_redacted_bounded_and_never_rebound_current(monkeypatch):
+    from app.services.result_report.schema import utf8_json_size_bytes, validate_full_report_payload
+
+    seeded = await _seed_snapshot_domain_reports(monkeypatch)
+    secret = "sk-archived-report-credential-123456"
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        parsed = json.loads(json.dumps(scenario.parsed_context))
+        history = parsed["full_report_history"]
+        history["api_key"] = secret
+        history["result_fingerprint"] = secret
+        history["report"]["summary"] = f"Archived analysis with api_key={secret}"
+        scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+        blob = export_snapshot_zip(scenario.id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        scenario_text = archive.read("scenario.json").decode()
+        exported = json.loads(scenario_text)["parsed_context"]
+    assert secret not in scenario_text
+    archive_report = exported["full_report_history"]["report"]
+    validate_full_report_payload(archive_report)
+    assert utf8_json_size_bytes(archive_report) <= settings.REPORT_FULL_REPORT_MAX_BYTES
+    assert set(exported["full_report_history"]) == {"report", "result_fingerprint"}
+
+    def make_oversized_history(payload):
+        payload["parsed_context"]["full_report_history"]["report"]["summary"] = (
+            "x" * (settings.REPORT_FULL_REPORT_MAX_BYTES + 1)
+        )
+
+    oversized = _rewrite_snapshot_scenario_json(blob, make_oversized_history)
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(oversized, "history-budget-importer", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        assert "full_report" in imported.parsed_context
+        assert "full_report_history" not in imported.parsed_context
+        source = session.get(Scenario, seeded["scenario_id"])
+        assert source is not None
+        parsed = json.loads(json.dumps(source.parsed_context))
+        make_oversized_history({"parsed_context": parsed})
+        source.parsed_context = parsed
+        session.add(source)
+        session.commit()
+        exported_oversized = export_snapshot_zip(source.id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(exported_oversized)) as archive:
+        exported_context = json.loads(archive.read("scenario.json"))["parsed_context"]
+        assert "full_report_history" not in exported_context
+
+
+@pytest.mark.asyncio
+async def test_snapshot_drops_unmapped_report_domain_and_history_coordinates(monkeypatch):
+    seeded = await _seed_snapshot_domain_reports(monkeypatch)
+
+    def inject_foreign_coordinates(payload):
+        parsed = payload["parsed_context"]
+        parsed["full_report"]["domain_consistency"]["branch_id"] = "foreign-domain-branch"
+        parsed["full_report_history"]["report"]["target_branch_id"] = "foreign-history-branch"
+        parsed["full_report_history"]["report"]["domain_consistency"]["branch_id"] = (
+            "foreign-history-branch"
+        )
+
+    forged = _rewrite_snapshot_scenario_json(seeded["blob"], inject_foreign_coordinates)
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(forged, "foreign-report-importer", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        assert "full_report" not in imported.parsed_context
+        assert "full_report_history" not in imported.parsed_context
+        assert "foreign-domain-branch" not in json.dumps(imported.parsed_context)
+        assert "foreign-history-branch" not in json.dumps(imported.parsed_context)
+
+
 def test_snapshot_round_trip_recompiles_legacy_report_without_runtime_or_claims():
     scenario_id = _seed_scenario_with_full_report_snapshot(_legal_full_report())
     _seed_full_report_coordinate_rows(scenario_id)

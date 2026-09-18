@@ -181,6 +181,10 @@
     },
     "app_title": "SwarmOracle",
     "home": {
+      "simulation_controls_title": "Simulation size",
+      "simulation_controls_note": "Rounds and Agent count apply only to simulations; they do not change Debate Arena.",
+      "reasoning_default": "Server default",
+      "launch_owner_changed": "Your session changed. Review this launch again.",
       "launch_profile_refresh_failed": "Could not refresh model profiles. Please retry.",
       "launch_profile_refreshed": "Model profiles refreshed. Review the launch summary again.",
       "launch_profile_refreshing": "Refreshing model profiles…",
@@ -666,6 +670,18 @@
       "step_deep_dive": "Deep Dive"
     },
     "result": {
+      "bridge_historical_report_title": "Read the saved analysis",
+      "bridge_historical_report_desc": "Review the earlier analysis or generate one for the current state.",
+      "bridge_brief_report_title": "Read the short report",
+      "bridge_brief_report_desc": "Read saved evidence first; request a full analysis when needed.",
+      "change_editor_title": "Rewrite a turn and replay",
+      "change_editor_desc": "Choose a saved turn and explore a different decision.",
+      "change_requires_completed": "A completed simulation is required.",
+      "compare_existing_title": "Compare existing branches",
+      "compare_existing_desc": "Inspect differences between branches that already exist.",
+      "task_verify": "Check the evidence",
+      "task_ask": "Ask the characters",
+      "task_change": "Try a different decision",
       "simulation_weight_hint": "Relative weight of the simulated path. Real-world predictions and gameplay points are separate.",
       "simulation_weight": "Simulation weight",
       "evidence_unavailable": "No saved evidence is available for this result.",
@@ -929,7 +945,18 @@
         "readFullReport": "Read full report",
         "readFullReportLead": "Want the full reasoning?",
         "takeawaysLabel": "Key takeaways",
-      "disclaimer_suppressed": "Statistical band hidden: no answer-bearing branch was available to anchor it."
+      "disclaimer_suppressed": "Statistical band hidden: no answer-bearing branch was available to anchor it.",
+        "historyTitle": "Previous full analysis",
+        "historyReadOnly": "This analysis belongs to an earlier simulation state. Read it as history; the current report remains separate.",
+        "returnCurrent": "Return to current report",
+        "readPreviousFull": "Read previous full analysis",
+        "domainStateTitle": "Check the saved simulation state",
+        "historicalDomainState": "State recorded with this earlier analysis",
+        "domainStateUnverified": "These values come from saved rule decisions. A proposal is not execution, and narrative claims have not been verified against these values.",
+        "domainStateUnavailable": "This report has no verifiable domain state. Its narrative cannot establish that a policy was adopted or executed.",
+        "domainStateRound": "Saved through round {{round}}",
+        "domainAdoptedDecision": "Adopted simulation decision",
+        "domainModeledState": "Modeled state"
       },
       "title": "Simulation Results",
       "subtitle": "Multi-Ending Comparison",
@@ -1697,6 +1724,14 @@
       "submit_action_short": "Inject this card"
     },
     "debate": {
+      "review_cost_unknown": "Total cost and token usage depend on the selected model, role setup, summaries, optional analysis and retries.",
+      "start_failed": "Could not start this debate. Retry with the reviewed setup.",
+      "review_title": "Review debate launch",
+      "review_structure": "Two sides and one judge. Four speaking phases: opening, crossfire, rebuttal and closing, followed by a verdict.",
+      "review_extra_work": "Role setup, summaries, enabled insight or argument-map analysis, and retries may add model requests. The request count is not fixed.",
+      "review_start": "Start this debate",
+      "review_starting": "Starting debate…",
+      "review_auto_agent": "Generated for this debate",
       "stage_not_run": "Not completed",
       "return_to_latest": "Return to latest saved turn",
       "provisional_score_notice": "Scores shown are provisional; this run has no final verdict.",
@@ -2020,7 +2055,8 @@
       "anchor_kind_insight": "Insight",
       "anchor_kind_key_moment": "Key moment",
       "anchor_kind_quote": "Quote",
-      "anchor_kind_default": "Anchor"
+      "anchor_kind_default": "Anchor",
+      "provider_inherit": "Use room model / server default"
     },
     "roundtable": {
       "output_archived": "Imported saved analysis; original source links are unavailable.",
@@ -2597,7 +2633,8 @@
       "bias_levels": {
         "high": "High",
         "low": "Low"
-      }
+      },
+      "edit_agent_aria": "Edit {{name}}"
     },
     "agent_workshop": {
       "bias_title": "Decision Bias Profile",
@@ -2652,7 +2689,7 @@
       "feature_disabled": "Agent backups are not enabled.",
       "export_not_found": "Agent backup could not be found.",
       "export_failed": "Could not export Agent backup. Please try again.",
-      "import_conflict": "This Agent backup already exists for your account.",
+      "import_conflict": "This Agent backup already exists for your account. Choose a different backup or change its content before trying again.",
       "import_invalid": "Agent backup failed server validation.",
       "import_not_allowed": "Creating Agents from backup is not enabled.",
       "import_failed": "Could not create Agent from backup. Please try again.",
@@ -2696,7 +2733,7 @@
       "invalid_json": "This file does not contain valid JSON.",
       "invalid_utf8": "This file is not valid UTF-8 text.",
       "too_large": "Agent Pack files must be 256 KiB or smaller.",
-      "conflict": "No agents were imported because this pack conflicts with your library.",
+      "conflict": "No agents were imported because this pack conflicts with your library. Choose a different pack or change its content before trying again.",
       "unavailable": "Import is temporarily unavailable. Try again.",
       "server_invalid": "The pack did not pass server validation. No agents were imported.",
       "failed": "The pack could not be imported. No agents were imported. Try again.",
@@ -2970,7 +3007,8 @@
       "analysis_cross_branch": "Cross-branch Edges",
       "analysis_avg_max_degree": "Avg / Max Degree",
       "analysis_degree_distribution": "Degree Distribution",
-      "analysis_degree_n": "Degree {{degree}}"
+      "analysis_degree_n": "Degree {{degree}}",
+      "type_counterfactual": "Counterfactual"
     },
     "action_ledger": {
       "reaction": "Reaction",
@@ -3002,10 +3040,17 @@
       "round": "Round {{round}}",
       "target": "Target: {{target}}",
       "failure_code": "Failure: {{code}}",
-      "type_post": "Post", "type_comment": "Comment", "type_reaction": "Reaction",
-      "type_follow": "Follow", "type_mute": "Mute", "type_search": "Search",
-      "type_trend": "Trend", "type_refresh": "Refresh", "type_idle": "Idle",
-      "status_verified": "Verified", "status_unavailable": "Unavailable",
+      "type_post": "Post",
+      "type_comment": "Comment",
+      "type_reaction": "Reaction",
+      "type_follow": "Follow",
+      "type_mute": "Mute",
+      "type_search": "Search",
+      "type_trend": "Trend",
+      "type_refresh": "Refresh",
+      "type_idle": "Idle",
+      "status_verified": "Verified",
+      "status_unavailable": "Unavailable",
       "status_failed": "Failed",
       "observation_verified": "Observation evidence: {{count}} source messages",
       "observation_empty": "No prior observation evidence was used.",
@@ -3109,6 +3154,8 @@
       "refs_shown": "Showing {{shown}} of {{total}}"
     },
     "compare": {
+      "branch_original_name": "{{branch}} (Original)",
+      "branch_counterfactual_name": "{{branch}} (Counterfactual)",
       "resimulate_requires_completed": "Only a completed run can start this continuation.",
       "title": "Compare branches",
       "missing_params": "Missing branch parameters",
@@ -3116,8 +3163,8 @@
       "error_fetch": "Unable to load comparison data right now. Please retry.",
       "round": "Round {{round}}",
       "divergence_label": "Divergence",
-      "branch_a_label": "Branch A (Original)",
-      "branch_b_label": "Branch B (Counterfactual)",
+      "branch_a_label": "Branch A",
+      "branch_b_label": "Branch B",
       "feature_disabled": "Counterfactual replay feature is not enabled.",
       "latest_round": "Latest round",
       "context_aria": "Comparison context",
@@ -3253,7 +3300,7 @@
       }
     },
     "workbench": {
-      "resize_divider": "Drag to resize panels",
+      "resize_divider": "Resize panels. Use Left and Right arrows, Home or End. Enter resets.",
       "title": "Graph Workbench",
       "layout_graph": "Causal",
       "layout_split": "Split",
@@ -3264,7 +3311,8 @@
       "kg_panel": "Knowledge Graph",
       "loading": "Loading workbench...",
       "error": "Failed to load workbench",
-      "unavailable": "Workbench feature is not enabled"
+      "unavailable": "Workbench feature is not enabled",
+      "resize_value": "Causal {{left}}%, knowledge {{right}}%"
     },
     "kg_graph_board": {
       "mobile_truncate_notice": "Showing {{cap}} of {{total}} nodes. Use search or type filters to focus.",
@@ -3299,7 +3347,10 @@
       "legend_desc_verdict": "The final outcome or decision",
       "legend_desc_outcome": "The result of an action or event",
       "legend_interaction_hint": "Click any node to see full details and start a conversation.",
-      "filter_all_hidden": "All nodes are filtered out. Click a type chip above to show them."
+      "filter_all_hidden": "All nodes are filtered out. Click a type chip above to show them.",
+      "no_filter_matches": "No nodes match these filters.",
+      "clear_filters": "Clear search and filters",
+      "focused_labels_hint": "Select or focus a node to read its label."
     },
     "agent_profile": {
       "dialog_label": "Agent Profile",
@@ -3423,7 +3474,8 @@
       "value_available": "Available",
       "value_unavailable": "Unavailable",
       "value_yes": "Yes",
-      "value_no": "No"
+      "value_no": "No",
+      "ask_about_node": "Ask about this node"
     },
     "pipeline": {
       "parsing": "Parsing…",
@@ -3772,14 +3824,28 @@
       },
       "history": {
         "load_history": "Load History",
-        "loading": "Loading conversations...",
-        "load_failed": "Failed to load conversations.",
-        "retry": "Retry",
+        "loading": "Loading conversation…",
+        "load_failed": "Conversation history could not be loaded.",
+        "retry": "Retry history",
         "no_history": "No conversation history",
         "thread_count": "{{count}} messages",
         "select_thread": "Select a conversation to reload",
         "load_more": "Load more",
         "untitled_thread": "Untitled conversation"
+      },
+      "transcript": {
+        "user": "You",
+        "assistant": "Assistant",
+        "load_earlier": "Load earlier messages",
+        "aborted": "Reply stopped",
+        "failed": "Reply failed. Your question is saved."
+      },
+      "readiness": {
+        "checking": "Checking model configuration…",
+        "configuration_required": "Configure a model to send messages. Your draft and history are kept.",
+        "unknown": "Model readiness could not be verified. You can retry the check or try sending.",
+        "configure": "Configure model",
+        "retry": "Retry check"
       }
     },
     "source": {
@@ -3938,7 +4004,10 @@
       "col_label": "Label",
       "col_round": "Round",
       "related_incoming": "Upstream: {{source}}",
-      "related_outgoing": "Downstream: {{target}}"
+      "related_outgoing": "Downstream: {{target}}",
+      "no_filter_matches": "No nodes match these filters.",
+      "clear_filters": "Clear search and filters",
+      "back_to_result": "Back to Result"
     },
     "timeline_galaxy": {
       "node_unavailable": "This node is no longer available. Reload the timeline.",

@@ -1029,9 +1029,12 @@ def test_debate_model_profiles_resolve_per_side_and_do_not_leak(monkeypatch, cap
         assert secret not in log_text
 
 
+@pytest.mark.parametrize("selected_effort", [None, "high"])
 def test_debate_partial_role_profile_keeps_global_byok_only_as_other_side_fallback(
-    monkeypatch,
+    monkeypatch, selected_effort,
 ):
+    monkeypatch.setattr(debate_api.settings, "LLM_REASONING_EFFORT", "low")
+    effective_effort = selected_effort or "low"
     client = TestClient(app)
     profile_response = client.post(
         "/api/model-profiles",
@@ -1072,6 +1075,7 @@ def test_debate_partial_role_profile_keeps_global_byok_only_as_other_side_fallba
             "llm_api_key": "sk-provider-a-global",
             "llm_base_url": "https://api.openai.com/v1",
             "llm_model": "provider-a-model",
+            "reasoning_effort": selected_effort,
             "llm_requests_per_minute": 91,
             "llm_tokens_per_minute": 91000,
         },
@@ -1084,21 +1088,27 @@ def test_debate_partial_role_profile_keeps_global_byok_only_as_other_side_fallba
     assert by_side["proposition"]["model"] == "provider-b-model"
     assert by_side["proposition"]["requests_per_minute"] == 37
     assert by_side["proposition"]["tokens_per_minute"] == 37000
+    assert by_side["proposition"]["reasoning_effort"] == effective_effort
     assert "opposition" not in by_side
     assert "judge" not in by_side
     assert captured["llm_overrides"] == {
         "api_key": "sk-provider-a-global",
         "base_url": "https://api.openai.com/v1",
         "model": "provider-a-model",
-        "reasoning_effort": None,
+        "reasoning_effort": effective_effort,
         "requests_per_minute": 91,
         "tokens_per_minute": 91000,
     }
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("selected_effort", "server_effort", "expected_effort"),
+    [("low", "high", "low"), ("high", "low", "high"), (None, "low", "low"),
+     (None, "none", "none")],
+)
 async def test_profile_only_parse_handoff_uses_profile_credentials_without_static_key(
-    monkeypatch,
+    monkeypatch, selected_effort, server_effort, expected_effort,
 ):
     import app.api.helpers as helpers_api
     from app.models.model_profile import ModelProfile
@@ -1109,11 +1119,14 @@ async def test_profile_only_parse_handoff_uses_profile_credentials_without_stati
     monkeypatch.setattr(helpers_api.settings, "FEATURE_AGENT_IDENTITY", False)
     monkeypatch.setattr(helpers_api.settings, "FEATURE_MODEL_PROFILES", True)
 
+    monkeypatch.setattr(helpers_api.settings, "LLM_REASONING_EFFORT", server_effort)
+
     captured_parse: dict[str, object] = {}
     captured_runtime: dict[str, object] = {}
 
     async def _fake_parse_question(*_args, **kwargs):
         captured_parse.update(kwargs)
+        captured_parse["scoped_effort"] = helpers_api.resolve_reasoning_effort("medium")
         return {
             "setting": {},
             "key_variable": "profile-only path",
@@ -1132,6 +1145,7 @@ async def test_profile_only_parse_handoff_uses_profile_credentials_without_stati
 
     async def _fake_run_sim_background(*args, **kwargs):
         captured_runtime["scenario_id"] = args[0]
+        captured_runtime["scoped_effort"] = helpers_api.resolve_reasoning_effort("medium")
         captured_runtime["llm_overrides"] = dict(kwargs.get("llm_overrides") or {})
         return None
 
@@ -1191,7 +1205,7 @@ async def test_profile_only_parse_handoff_uses_profile_credentials_without_stati
             hierarchical=False,
             rounds=1,
             visualization_enabled=False,
-            reasoning_effort=None,
+            reasoning_effort=selected_effort,
             temperature=None,
             branch_sensitivity=None,
             fork_prompt_variant=None,
@@ -1216,11 +1230,15 @@ async def test_profile_only_parse_handoff_uses_profile_credentials_without_stati
     assert captured_parse["api_key"] == SECRET_KEY
     assert captured_parse["base_url"] == "https://api.openai.com/v1"
     assert captured_parse["model"] == "profile-only-model"
+    assert captured_parse["reasoning_effort"] == expected_effort
+    assert captured_parse["scoped_effort"] == expected_effort
+    assert captured_runtime["scoped_effort"] == expected_effort
 
     llm_overrides = captured_runtime["llm_overrides"]
     assert llm_overrides["api_key"] == SECRET_KEY
     assert llm_overrides["base_url"] == "https://api.openai.com/v1"
     assert llm_overrides["model"] == "profile-only-model"
+    assert llm_overrides["reasoning_effort"] == expected_effort
     assert captured_runtime["scenario_id"] == scenario_id
 
     with Session(engine) as session:
@@ -1228,6 +1246,7 @@ async def test_profile_only_parse_handoff_uses_profile_credentials_without_stati
         assert scenario is not None
         _assert_secret_absent(scenario.parsed_context)
         assert scenario.parsed_context["model_profile_id"] == profile_id
+        assert scenario.parsed_context["reasoning_effort"] == expected_effort
         assert scenario.parsed_context["llm_requests_per_minute"] == 17
         assert scenario.parsed_context["llm_tokens_per_minute"] == 17000
         assert scenario.parsed_context["llm_concurrency"] == 2

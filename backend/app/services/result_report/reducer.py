@@ -37,6 +37,7 @@ from app.services.result_report.schema import (
     AnalyticConfidence,
     Chart,
     DissentingView,
+    DomainConsistency,
     EvidenceRef,
     I18nText,
     KeyParticipant,
@@ -84,6 +85,7 @@ class ReducerResult:
     round_count: int
     report_scope: ReportLineageScope | None
     verdict_disclaimer: str | None = None
+    domain_context: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -328,6 +330,21 @@ def reduce(
             data=_faction_share_data(faction_snapshots, relation_stats),
         ),
     ]
+    from app.services.action_ledger import project_report_domain_context_v1
+
+    with Session(engine) as session:
+        domain_context = project_report_domain_context_v1(
+            session,
+            scenario=scenario,
+            branch_id=target_branch_id,
+            as_of_round=len(resolved_scope.rounds),
+        )
+    if domain_context is not None:
+        boundary = DomainConsistency.model_validate({
+            key: value for key, value in domain_context.items()
+            if key in DomainConsistency.model_fields
+        })
+        analytic_confidence = boundary.bound_confidence(analytic_confidence)
 
     return ReducerResult(
         status=status,
@@ -357,6 +374,7 @@ def reduce(
         round_count=_count_rounds(engine, resolved_scope),
         report_scope=resolved_scope,
         verdict_disclaimer=verdict_disclaimer,
+        domain_context=domain_context,
     )
 
 

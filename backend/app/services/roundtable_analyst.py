@@ -27,6 +27,7 @@ from app.services.llm_client import (
     format_untrusted_text_block,
     llm_call_json,
     llm_request_scope,
+    resolve_reasoning_effort,
     safe_llm_error_payload,
 )
 from app.services.web_context import fetch_web_context
@@ -508,6 +509,7 @@ async def build_roundtable_analyst_stream(
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     requests_per_minute: int | None = None,
     tokens_per_minute: int | None = None,
     concurrency: int | None = None,
@@ -517,6 +519,7 @@ async def build_roundtable_analyst_stream(
 ) -> AsyncIterator[dict[str, Any]]:
     """Prepare and return the analyst SSE event stream."""
 
+    reasoning_effort = resolve_reasoning_effort(reasoning_effort)
     normalized_question = _normalize_question(question)
     context = await asyncio.to_thread(_load_scenario_context, scenario_id, room_id)
 
@@ -524,6 +527,7 @@ async def build_roundtable_analyst_stream(
         history_blocks: list[str] = []
         with llm_request_scope(
             purpose="roundtable_analyst",
+            reasoning_effort=reasoning_effort,
             requests_per_minute=requests_per_minute,
             tokens_per_minute=tokens_per_minute,
             concurrency=concurrency,
@@ -539,7 +543,7 @@ async def build_roundtable_analyst_stream(
                         api_key=api_key,
                         base_url=base_url,
                         model=model,
-                        reasoning_effort="medium",
+                        reasoning_effort=reasoning_effort,
                         temperature=0.7,
                     )
                 except LLMError as exc:

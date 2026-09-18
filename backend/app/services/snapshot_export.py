@@ -70,7 +70,12 @@ from app.services.domain_world import (
     validate_domain_world_config_v1,
 )
 from app.services.result_report.claims import compile_report_claims_in_session
-from app.services.result_report.schema import validate_full_report_payload
+from app.services.result_report.queries import REPORT_SCOPE_FINGERPRINT_KEY
+from app.services.result_report.schema import (
+    DomainConsistency,
+    FullReport,
+    validate_full_report_payload,
+)
 from app.services.simulation_actions import normalize_extracted_action
 
 logger = logging.getLogger(__name__)
@@ -727,6 +732,23 @@ def _normalize_full_report_status_for_snapshot(value: Any) -> Any:
     return normalized
 
 
+def _normalize_report_history_for_snapshot(value: Any) -> dict[str, Any] | None:
+    """Retain one schema-checked, byte-bounded archive without live authority."""
+    if not isinstance(value, dict):
+        return None
+    payload = value.get("report")
+    if not isinstance(payload, dict):
+        return None
+    try:
+        report = validate_full_report_payload(payload)
+    except ValueError:
+        logger.warning("Dropped invalid or oversized snapshot report history")
+        return None
+    if report.detail_level != "full" or report.status not in {"complete", "partial"}:
+        return None
+    return {"report": report.model_dump(mode="json"), "result_fingerprint": None}
+
+
 def _domain_config_json_v1(value: object) -> dict[str, Any]:
     config = validate_domain_world_config_v1(value)
     return json.loads(canonical_json_bytes_v1(config))
@@ -971,6 +993,9 @@ def _normalize_parsed_context_for_snapshot(
         normalized["full_report"] = _normalize_full_report_status_for_snapshot(
             normalized.get("full_report")
         )
+    history = _normalize_report_history_for_snapshot(normalized.pop("full_report_history", None))
+    if history is not None:
+        normalized["full_report_history"] = history
     if validated_domain_config is not None:
         # Schema authority has already passed exact-record validation.  Keep
         # identifiers and typed values byte-stable; only display labels remain
@@ -1889,6 +1914,12 @@ def _remap_full_report_coordinates(
         if not mapped_target:
             return None
         report["target_branch_id"] = mapped_target
+    domain = report.get("domain_consistency")
+    if isinstance(domain, dict):
+        mapped_domain_branch = branch_id_map.get(str(domain.get("branch_id") or ""))
+        if not mapped_domain_branch or mapped_domain_branch != report.get("target_branch_id"):
+            return None
+        domain["branch_id"] = mapped_domain_branch
 
     dissenting = report.get("dissenting")
     if isinstance(dissenting, dict):
@@ -1899,6 +1930,19 @@ def _remap_full_report_coordinates(
                 dissenting["runner_up_branch_id"] = mapped_runner_up
             else:
                 report["dissenting"] = None
+    authored_variants = report.get("authored_content_i18n")
+    for authored in (authored_variants.values() if isinstance(authored_variants, dict) else ()):
+        if not isinstance(authored, dict):
+            continue
+        translated_dissenting = authored.get("dissenting")
+        if isinstance(translated_dissenting, dict):
+            mapped_runner_up = branch_id_map.get(
+                str(translated_dissenting.get("runner_up_branch_id") or "")
+            )
+            if mapped_runner_up:
+                translated_dissenting["runner_up_branch_id"] = mapped_runner_up
+            else:
+                authored["dissenting"] = None
 
     evidence: list[dict[str, Any]] = []
     for raw in report.get("evidence") or []:
@@ -1996,6 +2040,72 @@ def _remap_full_report_coordinates(
             ]
 
     return report
+
+
+def _bind_imported_report_domain(
+    session: Session,
+    scenario: Scenario,
+    report: FullReport,
+    *,
+    historical: bool = False,
+) -> FullReport:
+    """Rebuild current state receipts; historical revisions are not portable."""
+    from app.services.action_ledger import project_report_domain_context_v1
+    from app.services.branch_lineage import BranchLineageError, select_branch_rounds
+
+    previous = report.domain_consistency
+    context = None
+    if not historical:
+        try:
+            rounds = select_branch_rounds(
+                session, scenario_id=scenario.id, branch_id=report.target_branch_id,
+            ).rounds
+            context = project_report_domain_context_v1(
+                session, scenario=scenario, branch_id=report.target_branch_id,
+                as_of_round=max((row.round_number for row in rounds), default=0),
+            )
+        except BranchLineageError:
+            context = None
+    config = (scenario.parsed_context or {}).get("domain_world_v1")
+    domain_required = isinstance(config, dict) and config.get("reason_code") != "not_generated"
+    if context is None and previous is None and (historical or not domain_required):
+        return report
+    boundary = (
+        DomainConsistency.model_validate({
+            key: value for key, value in context.items() if key in DomainConsistency.model_fields
+        })
+        if context is not None
+        else DomainConsistency(
+            status="unavailable", branch_id=report.target_branch_id,
+            failure_code=(
+                "SNAPSHOT_HISTORICAL_STATE_UNAVAILABLE"
+                if historical else "DOMAIN_SCHEMA_UNAVAILABLE"
+            ),
+        )
+    )
+
+    def disclaimer(text: str | None, language: str) -> str:
+        tail = text or ""
+        if previous is not None:
+            # The input report has already validated this exact prefix, including
+            # every authored language variant. Do not edit quotes or model prose.
+            tail = tail[len(previous.disclosure(language)):].lstrip()
+        return "\n\n".join(filter(None, (boundary.disclosure(language), tail)))
+
+    updated = report.model_copy(update={
+        "domain_consistency": boundary,
+        "verdict": report.verdict.model_copy(update={
+            "disclaimer": disclaimer(report.verdict.disclaimer, report.language),
+            "analytic_confidence": boundary.bound_confidence(report.verdict.analytic_confidence),
+        }),
+        "authored_content_i18n": {
+            language: content.model_copy(update={
+                "disclaimer": disclaimer(content.disclaimer, language),
+            })
+            for language, content in report.authored_content_i18n.items()
+        },
+    })
+    return validate_full_report_payload(updated.model_dump(mode="json"))
 
 
 def _sync_snapshot_premortem_analysis(
@@ -2315,6 +2425,11 @@ def import_snapshot_zip(
     deferred_full_report = _normalize_full_report_status_for_snapshot(
         parsed_context.pop("full_report", None)
     )
+    # Imported IDs and durable inputs differ from the original opaque binding.
+    # Keep the existing historical/read-only semantics; rebuilding a display
+    # receipt does not prove the source report was current before export.
+    parsed_context.pop(REPORT_SCOPE_FINGERPRINT_KEY, None)
+    deferred_report_history = parsed_context.pop("full_report_history", None)
     deferred_result_quality = parsed_context.pop("result_quality", None)
     deferred_agent_runtime = parsed_context.pop("agent_runtime_v1", None)
 
@@ -2752,6 +2867,7 @@ def import_snapshot_zip(
             remapped_report = _normalize_full_report_status_for_snapshot(remapped_report)
             try:
                 validated_report = validate_full_report_payload(remapped_report)
+                validated_report = _bind_imported_report_domain(session, scenario, validated_report)
                 imported_rounds = [
                     session.get(Round, imported_round_id)
                     for imported_round_id in round_id_map.values()
@@ -2789,7 +2905,13 @@ def import_snapshot_zip(
                         "verdict": validated_report.verdict.model_copy(
                             update={
                                 "headline_answer": compilation.verdict_headline,
-                                "analytic_confidence": compilation.analytic_confidence,
+                                "analytic_confidence": (
+                                    validated_report.domain_consistency.bound_confidence(
+                                        compilation.analytic_confidence,
+                                    )
+                                    if validated_report.domain_consistency is not None
+                                    else compilation.analytic_confidence
+                                ),
                             }
                         ),
                     }
@@ -2841,6 +2963,28 @@ def import_snapshot_zip(
                     synchronized_quality.pop("confidence_kind", None)
                     synchronized_quality.pop("confidence_terminal_branch_ids", None)
                     parsed["result_quality"] = synchronized_quality
+                scenario.parsed_context = parsed
+                session.add(scenario)
+
+    if isinstance(deferred_report_history, dict):
+        history_report = _remap_full_report_coordinates(
+            deferred_report_history.get("report"), branch_id_map=branch_id_map,
+            agent_id_map=agent_id_map, round_id_map=round_id_map,
+            message_id_map=message_id_map, action_id_map=action_id_map,
+        )
+        if history_report is not None:
+            try:
+                history_report = _bind_imported_report_domain(
+                    session, scenario, validate_full_report_payload(history_report),
+                    historical=True,
+                ).model_dump(mode="json")
+            except ValueError:
+                logger.warning("Dropped invalid remapped snapshot report history")
+            else:
+                parsed = dict(scenario.parsed_context or {})
+                parsed["full_report_history"] = {
+                    "report": history_report, "result_fingerprint": None,
+                }
                 scenario.parsed_context = parsed
                 session.add(scenario)
 

@@ -92,6 +92,7 @@ export interface CausalGraphBoardProps {
   onNodeClick?: (node: unknown) => void;
   className?: string;
   hideExport?: boolean;
+  inspectionActive?: boolean;
 }
 
 // ── Constants ───────────────────────────────────────────────
@@ -434,6 +435,7 @@ export default function CausalGraphBoard({
   onNodeClick: externalOnNodeClick,
   className,
   hideExport = false,
+  inspectionActive = true,
 }: CausalGraphBoardProps) {
   const { t } = useTranslation();
   const isCompactViewport = useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
@@ -447,12 +449,23 @@ export default function CausalGraphBoard({
   } = useScenarioGraph(scenarioId || null);
 
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [sheetState, setSheetState] = useState<ConvSheetState>(CLOSED_SHEET);
   const [agentSearch, setAgentSearch] = useState('');
 
   const exportRootId = `causal-board-${useId().replace(/:/g, '-')}`;
   const reactFlowRef = useRef<{ fitView?: (opts?: { padding?: number; duration?: number }) => void } | null>(null);
   const [detailRestoreFocusTarget, setDetailRestoreFocusTarget] = useState<HTMLElement | null>(null);
+  const graphCanvasRef = useRef<HTMLDivElement | null>(null);
+  const [inspectionScope, setInspectionScope] = useState({ scenarioId, active: inspectionActive });
+  if (inspectionScope.active !== inspectionActive || inspectionScope.scenarioId !== scenarioId) {
+    setInspectionScope({ scenarioId, active: inspectionActive });
+    if (!inspectionActive || inspectionScope.scenarioId !== scenarioId) {
+      setSelectedNode(null);
+      setDetailOpen(false);
+      setSheetState(CLOSED_SHEET);
+    }
+  }
 
   const searchState = useMemo(() => {
     if (!graphData) return { data: null, matchCount: 0, relatedCount: 0 };
@@ -536,7 +549,11 @@ export default function CausalGraphBoard({
   useEffect(() => {
     if (!selectedNode || !filteredData) return;
     if (!filteredData.nodes.some(n => n.id === selectedNode.id)) {
-      const t = setTimeout(() => setSelectedNode(null), 0);
+      const t = setTimeout(() => {
+        setSelectedNode(null);
+        setDetailOpen(false);
+        setSheetState(CLOSED_SHEET);
+      }, 0);
       return () => clearTimeout(t);
     }
   }, [selectedNode, filteredData]);
@@ -621,6 +638,8 @@ export default function CausalGraphBoard({
     const raw = rawNodeMap.get(nodeId);
     if (!raw) return;
     setDetailRestoreFocusTarget(triggerElement?.isConnected ? triggerElement : null);
+    setSheetState(CLOSED_SHEET);
+    setDetailOpen(true);
     const adjacentEvidence = buildAdjacentEvidence(nodeId, filteredData?.edges ?? [], t);
     setSelectedNode({
       id: raw.id,
@@ -631,7 +650,12 @@ export default function CausalGraphBoard({
       ...(adjacentEvidence.length > 0 ? { evidenceList: adjacentEvidence } : {}),
     });
     externalOnNodeClick?.(raw);
+  }, [rawNodeMap, filteredData?.edges, t, externalOnNodeClick]);
 
+  const askSelectedNode = useCallback(() => {
+    const raw = selectedNode && rawNodeMap.get(selectedNode.id);
+    if (!raw) return;
+    setDetailOpen(false);
     const rawPayload = typeof raw.payload === 'object' && raw.payload !== null && !Array.isArray(raw.payload)
       ? raw.payload as Record<string, unknown>
       : {};
@@ -642,6 +666,7 @@ export default function CausalGraphBoard({
       scenarioId,
       identityId: null,
       origin: {
+        surface: 'causal',
         nodeId: raw.id,
         nodeType: raw.type,
         excerpt: fullContent || raw.label || raw.key,
@@ -652,7 +677,7 @@ export default function CausalGraphBoard({
         typeColor: NODE_TYPE_COLORS_HEX[raw.type] ?? NODE_TYPE_COLORS_HEX.event,
       },
     });
-  }, [rawNodeMap, filteredData?.edges, t, externalOnNodeClick, scenarioId]);
+  }, [rawNodeMap, selectedNode, scenarioId]);
 
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const trigger = _event.target instanceof Element
@@ -799,11 +824,13 @@ export default function CausalGraphBoard({
               </div>
             ))}
           </div>
-          <NodeDetailPanel panelId="causal-board-detail" key={selectedNode?.id ?? 'closed'} node={selectedNode} onClose={() => setSelectedNode(null)} restoreFocusTarget={detailRestoreFocusTarget} />
+          <NodeDetailPanel panelId="causal-board-detail" key={selectedNode?.id ?? 'closed'} node={inspectionActive && detailOpen ? selectedNode : null} onClose={() => { setSelectedNode(null); setDetailOpen(false); }} onAsk={askSelectedNode} restoreFocusTarget={detailRestoreFocusTarget} />
         </div>
       ) : (
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
           <div
+            ref={graphCanvasRef}
+            tabIndex={-1}
             className="causal-board-export"
             data-testid="causal-board-export-target"
             data-export-root={exportRootId}
@@ -847,7 +874,7 @@ export default function CausalGraphBoard({
               )}
             </ReactFlow>
           </div>
-          <NodeDetailPanel panelId="causal-board-detail" key={selectedNode?.id ?? 'closed'} node={selectedNode} onClose={() => setSelectedNode(null)} restoreFocusTarget={detailRestoreFocusTarget} />
+          <NodeDetailPanel panelId="causal-board-detail" key={selectedNode?.id ?? 'closed'} node={inspectionActive && detailOpen ? selectedNode : null} onClose={() => { setSelectedNode(null); setDetailOpen(false); }} onAsk={askSelectedNode} restoreFocusTarget={detailRestoreFocusTarget} />
         </div>
       )}
 
@@ -858,7 +885,7 @@ export default function CausalGraphBoard({
         </div>
       )}
 
-      {sheetState.open && (
+      {inspectionActive && sheetState.open && filteredData?.nodes.some(node => node.id === sheetState.origin.nodeId) && (
         <NodeConversationSheet
           key={`${sheetState.scenarioId}:${sheetState.origin.nodeId}`}
           open={sheetState.open}
@@ -867,6 +894,8 @@ export default function CausalGraphBoard({
           scenarioId={sheetState.scenarioId}
           identityId={sheetState.identityId}
           origin={sheetState.origin}
+          restoreFocusTarget={detailRestoreFocusTarget}
+          restoreFocusFallback={graphCanvasRef}
         />
       )}
     </div>

@@ -757,6 +757,27 @@ export function getGameplayCardLabel(cardId: GameplayCardId, isZh: boolean): str
   return isZh ? card.labelZh : card.labelEn;
 }
 
+function includesProfileKeyword(question: string, keyword: string): boolean {
+  if ([...keyword].some((character) => character.charCodeAt(0) > 127)) {
+    return question.includes(keyword);
+  }
+
+  // ASCII tokens/phrases must not match inside names such as Harborfield.
+  // CJK phrases keep substring semantics; no regex lookbehind is required.
+  const isAsciiWordCharacter = (value: string | undefined): boolean => (
+    value !== undefined && /[a-z0-9_]/i.test(value)
+  );
+  let offset = question.indexOf(keyword);
+  while (offset !== -1) {
+    if (!isAsciiWordCharacter(question[offset - 1])
+      && !isAsciiWordCharacter(question[offset + keyword.length])) {
+      return true;
+    }
+    offset = question.indexOf(keyword, offset + 1);
+  }
+  return false;
+}
+
 export function inferGameplayProfile(
   question: string,
   sceneTheme?: string | null,
@@ -769,7 +790,9 @@ export function inferGameplayProfile(
 
   const lower = question.toLowerCase();
   for (const [profileId, keywords] of KEYWORD_TO_PROFILE) {
-    const matches = keywords.filter((keyword) => lower.includes(keyword.toLowerCase())).length;
+    const matches = keywords.filter(
+      (keyword) => includesProfileKeyword(lower, keyword.toLowerCase()),
+    ).length;
     if (matches > 0) addScore(profileId, matches);
   }
 

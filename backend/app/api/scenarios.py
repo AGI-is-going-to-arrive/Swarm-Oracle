@@ -95,6 +95,7 @@ from app.services.llm_client import (
     validate_llm_base_url,
 )
 from app.services.llm_resolution import (
+    conversation_llm_is_configured,
     merge_profile_provider_overrides,
     model_profile_provider_unresolved,
     raise_unresolved_model_profile_provider,
@@ -2478,10 +2479,12 @@ async def get_scenario(
     """Get scenario status, agents, and branches."""
     engine = get_engine()
     with Session(engine) as session:
-        require_owned_scenario(session, scenario_id, principal)
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        conversation_ready = conversation_llm_is_configured(session, scenario)
     result = load_scenario_response(engine, scenario_id)
     if not result:
         raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+    result.conversation_llm_configured = conversation_ready
     return result
 
 
@@ -2699,6 +2702,15 @@ async def get_story(
         )
         if isinstance(full_report, dict):
             full_report = _normalize_story_full_report_status(scenario_id, full_report)
+        saved_history = parsed_context.get("full_report_history")
+        historical_full_report = (
+            full_report_for_story(
+                saved_history.get("report"),
+                max_bytes=settings.REPORT_FULL_REPORT_MAX_BYTES,
+            )
+            if settings.FEATURE_RESULT_REPORT and isinstance(saved_history, dict)
+            else None
+        )
         from app.services.result_report.queries import (
             REPORT_SCOPE_FINGERPRINT_KEY,
             report_result_fingerprint,
@@ -2776,6 +2788,11 @@ async def get_story(
             "verdict_confidence_kind": verdict_confidence_kind,
             "full_report": full_report,
             "full_report_stale": full_report_stale,
+            **(
+                {"historical_full_report": historical_full_report}
+                if isinstance(historical_full_report, dict)
+                else {}
+            ),
             "world_outcomes": project_world_outcomes_v1(
                 session,
                 scenario=scenario,
@@ -2974,6 +2991,7 @@ async def generate_result_report(
         "api_key": resolved_llm.api_key,
         "base_url": resolved_llm.base_url,
         "model": resolved_llm.model,
+        "reasoning_effort": resolved_llm.reasoning_effort,
         "requests_per_minute": resolved_llm.requests_per_minute,
         "tokens_per_minute": resolved_llm.tokens_per_minute,
         "temperature": request_body.temperature,

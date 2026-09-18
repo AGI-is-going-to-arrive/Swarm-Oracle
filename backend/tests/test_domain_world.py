@@ -102,6 +102,7 @@ def _rule(
     preconditions: list[dict[str, object]] | None = None,
     opportunity_mode: str | None = "effect_only",
     epistemic_scope: str = "scenario_assumption",
+    adoption_policy: str | None = None,
 ) -> dict[str, object]:
     constant_value: str | None = None
     lower: str | None = None
@@ -125,6 +126,8 @@ def _rule(
     }
     if opportunity_mode is not None:
         row["opportunity_mode"] = opportunity_mode
+    if adoption_policy is not None:
+        row["adoption_policy"] = adoption_policy
     return row
 
 
@@ -1407,6 +1410,325 @@ def test_policy_a_merges_equal_sets_and_rejects_different_sets_or_set_add_mix():
     )
     assert {row.failure_code for row in mixed.adjudications} == {"DOMAIN_CONFLICT"}
     assert mixed.state_after == {"balance": "5"}
+
+
+def _commitment_config() -> DomainWorldConfigV1:
+    return _active_config(
+        variables=[
+            _variable(
+                "last_departure_delay",
+                semantic_role="commitment_state",
+                unit="second",
+                initial_value="0",
+                maximum="7200",
+            )
+        ],
+        rules=[
+            _rule(
+                "adopt_delay",
+                variable_id="last_departure_delay",
+                action_type="COMMENT",
+                operation="set_if_expected",
+                unit="second",
+                adoption_policy="unanimous_round_participants",
+            )
+        ],
+    )
+
+
+def _commitment_actions(
+    config: DomainWorldConfigV1,
+    targets: tuple[str, ...],
+    *,
+    before: str = "0",
+    revision: str | None = None,
+    round_number: int = 1,
+) -> list[DomainActionInputV1]:
+    return [
+        _action(
+            config,
+            [
+                _proposal(
+                    variable_id="last_departure_delay",
+                    rule_id="adopt_delay",
+                    operation="set_if_expected",
+                    requested_value=target,
+                    unit="second",
+                    expected_before=before,
+                    event_key=f"delay-{round_number}-{sequence}",
+                )
+            ],
+            revision=revision or _state_revision(config),
+            action_type="COMMENT",
+            sequence=sequence,
+            round_number=round_number,
+            round_id=f"round-{round_number}",
+        )
+        for sequence, target in enumerate(targets, 1)
+    ]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["add_constant", "add_requested", "saturating_add_constant", "saturating_add_requested"],
+)
+def test_commitment_schema_rejects_every_add_operation_even_with_adoption_policy(operation):
+    config = freeze_domain_schema_v1(
+        _schema(
+            variables=[_variable(semantic_role="commitment_state")],
+            rules=[
+                _rule(operation=operation, adoption_policy="unanimous_round_participants")
+            ],
+        )
+    )
+    assert (config.status, config.failure_code, config.reason_code) == (
+        "unavailable", "DOMAIN_SCHEMA_UNAVAILABLE", "schema_invalid"
+    )
+
+
+@pytest.mark.parametrize("operation", ["add_requested", "set_if_expected"])
+def test_legacy_commitment_schema_is_unavailable_without_rewriting_frozen_history(operation):
+    resource_config = _active_config(rules=[_rule(operation=operation)])
+    frozen = _config_json(resource_config)
+    frozen["schema"]["variables"][0]["semantic_role"] = "commitment_state"
+    semantic_schema = json.loads(canonical_json_bytes_v1(frozen["schema"]))
+    for variable in semantic_schema["variables"]:
+        variable.pop("label_en")
+        variable.pop("label_zh")
+    # This is the exact pre-fix schema hash, not an invalid-hash test fixture.
+    frozen["schema_hash"] = "sha256:" + hashlib.sha256(
+        canonical_json_bytes_v1(semantic_schema)
+    ).hexdigest()
+    historical_bytes = canonical_json_bytes_v1(frozen)
+
+    rejected = validate_domain_world_config_v1(frozen)
+    assert (rejected.status, rejected.reason_code) == ("unavailable", "schema_invalid")
+    assert canonical_json_bytes_v1(frozen) == historical_bytes
+    assert freeze_domain_schema_v1(frozen["schema"]).reason_code == "schema_invalid"
+
+    action = _action(
+        resource_config,
+        [_proposal(
+            operation=operation,
+            requested_value="7" if operation == "set_if_expected" else "1",
+            expected_before="5" if operation == "set_if_expected" else None,
+        )],
+        schema_hash=frozen["schema_hash"],
+    )
+    result = reduce_domain_round_v1(
+        config=rejected,
+        state_before={"balance": "5"},
+        state_revision_before=_digest("b"),
+        accepted_event_identities=(),
+        actions=[action],
+        round_number=1,
+    )
+    assert result.state_after == {"balance": "5"}
+    assert not result.state_deltas
+    assert not result.accepted_event_identities
+    assert (result.adjudications[0].status, result.adjudications[0].failure_code) == (
+        "unavailable", "DOMAIN_SCHEMA_UNAVAILABLE"
+    )
+
+
+def test_resource_schema_serialization_and_hash_are_unchanged_by_adoption_contract():
+    config = _active_config()
+    raw_schema = _schema()
+    assert _config_json(config)["schema"] == raw_schema
+    for variable in raw_schema["variables"]:
+        variable.pop("label_en")
+        variable.pop("label_zh")
+    assert config.schema_hash == "sha256:" + hashlib.sha256(
+        canonical_json_bytes_v1(raw_schema)
+    ).hexdigest()
+    assert validate_domain_world_config_v1(_config_json(_commitment_config())).status == "active"
+    assert freeze_domain_schema_v1(
+        _schema(rules=[_rule(adoption_policy="unanimous_round_participants")])
+    ).reason_code == "schema_invalid"
+
+
+def test_competing_commitment_targets_conflict_then_consensus_adopts_once():
+    config = _commitment_config()
+    alternatives = _commitment_actions(config, ("1800", "1800", "3600"))
+    conflict = _reduce(config, alternatives)
+    assert conflict.state_after == {"last_departure_delay": "0"}
+    assert not conflict.state_deltas
+    assert not conflict.accepted_event_identities
+    assert {receipt.failure_code for receipt in conflict.adjudications} == {"DOMAIN_CONFLICT"}
+    assert canonical_json_bytes_v1(conflict) == canonical_json_bytes_v1(
+        _reduce(config, list(reversed(alternatives)))
+    )
+
+    agreement = _commitment_actions(
+        config, ("1800", "1800", "1800"), revision=conflict.state_revision, round_number=2
+    )
+    adopted = _reduce(config, agreement, revision=conflict.state_revision, round_number=2)
+    assert adopted.state_after == {"last_departure_delay": "1800"}
+    assert len(adopted.state_deltas) == 1
+    delta = adopted.state_deltas[0]
+    assert (delta.before, delta.after, delta.applied_delta) == ("0", "1800", "1800")
+    assert [source.agent_id for source in delta.sources] == ["agent-1", "agent-2", "agent-3"]
+    assert [receipt.applied_delta for receipt in adopted.adjudications] == ["1800", "0", "0"]
+    assert all(receipt.status == "verified" for receipt in adopted.adjudications)
+    assert all(
+        receipt.epistemic_scope == "scenario_assumption" for receipt in adopted.adjudications
+    )
+    assert len(adopted.accepted_event_identities) == 3
+    assert canonical_json_bytes_v1(adopted) == canonical_json_bytes_v1(
+        _reduce(config, list(reversed(agreement)), revision=conflict.state_revision, round_number=2)
+    )
+
+    reaffirmed = _reduce(
+        config,
+        _commitment_actions(config, ("1800", "1800", "1800"), before="1800", round_number=3),
+        state=dict(adopted.state_after),
+        revision=adopted.state_revision,
+        accepted=tuple(adopted.accepted_event_identities),
+        round_number=3,
+    )
+    assert reaffirmed.state_after == {"last_departure_delay": "1800"}
+    assert not reaffirmed.state_deltas
+    assert [receipt.applied_delta for receipt in reaffirmed.adjudications] == ["0", "0", "0"]
+
+
+@pytest.mark.parametrize("missing_kind", ["idle", "no_payload", "unverified", "invalid", "stale"])
+def test_commitment_requires_a_valid_proposal_from_every_round_participant(missing_kind):
+    config = _commitment_config()
+    revision = _state_revision(config)
+    actions = _commitment_actions(config, ("1800", "1800", "1800"))
+    missing = actions[-1]
+    if missing_kind == "idle":
+        missing = dataclasses.replace(missing, action_type="IDLE", payload=None)
+    elif missing_kind == "no_payload":
+        missing = dataclasses.replace(missing, payload=None)
+    elif missing_kind == "unverified":
+        missing = dataclasses.replace(missing, action_status="unavailable")
+    else:
+        payload = json.loads(canonical_json_bytes_v1(missing.payload))
+        if missing_kind == "invalid":
+            payload["proposals"][0]["requested_value"] = "7201"
+        else:
+            payload["input_state_revision"] = _digest("f")
+        missing = dataclasses.replace(missing, payload=payload)
+    result = reduce_domain_round_v1(
+        config=config,
+        state_before={"last_departure_delay": "0"},
+        state_revision_before=revision,
+        accepted_event_identities=(),
+        actions=[*actions[:-1], missing],
+        round_number=1,
+    )
+    assert result.state_after == {"last_departure_delay": "0"}
+    assert not result.state_deltas
+    assert not result.accepted_event_identities
+    assert [receipt.failure_code for receipt in result.adjudications[:2]] == [
+        "DOMAIN_CONFLICT", "DOMAIN_CONFLICT"
+    ]
+    assert not any(receipt.status == "verified" for receipt in result.adjudications)
+
+
+def test_commitment_event_keys_do_not_erase_participant_support_or_multiply_adoption():
+    config = _commitment_config()
+    actions = _commitment_actions(config, ("1800", "1800", "1800"))
+    shared_event = []
+    for action in actions:
+        payload = json.loads(canonical_json_bytes_v1(action.payload))
+        payload["proposals"][0]["event_key"] = "adopt-delay-together"
+        shared_event.append(dataclasses.replace(action, payload=payload))
+    result = _reduce(config, shared_event)
+    assert result.state_after == {"last_departure_delay": "1800"}
+    assert len(result.state_deltas) == 1
+    assert len(result.state_deltas[0].sources) == 3
+    assert [receipt.applied_delta for receipt in result.adjudications] == ["1800", "0", "0"]
+    assert len(result.accepted_event_identities) == 1
+
+    # Repeated proposals from one actor cannot fill another actor's missing vote.
+    duplicate_payload = json.loads(canonical_json_bytes_v1(actions[0].payload))
+    duplicate_payload["proposals"] *= 2
+    incomplete = [
+        dataclasses.replace(actions[0], payload=duplicate_payload),
+        dataclasses.replace(actions[1], payload=None),
+    ]
+    rejected = _reduce(config, incomplete)
+    assert rejected.state_after == {"last_departure_delay": "0"}
+    assert not rejected.state_deltas
+    assert not rejected.accepted_event_identities
+
+
+def test_independent_resource_increments_still_sum_the_audit_operands():
+    config = _active_config(
+        variables=[_variable(initial_value="0", maximum="7200", unit="second")],
+        rules=[
+            _rule(action_type="COMMENT", unit="second", requested_maximum="7200")
+        ],
+    )
+    actions = [
+        _action(
+            config,
+            [_proposal(requested_value=value, unit="second", event_key=f"increment-{sequence}")],
+            action_type="COMMENT",
+            sequence=sequence,
+        )
+        for sequence, value in enumerate(("1800", "1800", "3600"), 1)
+    ]
+    result = _reduce(config, actions)
+    assert result.state_after == {"balance": "7200"}
+    assert [receipt.applied_delta for receipt in result.adjudications] == ["1800", "1800", "3600"]
+    assert result.state_deltas[0].applied_delta == "7200"
+
+
+@pytest.mark.parametrize(
+    ("variable", "target", "expected_deltas"),
+    [
+        (
+            _variable(value_type="boolean", initial_value=False, semantic_role="commitment_state"),
+            True,
+            [None, None],
+        ),
+        (
+            _variable(
+                value_type="enum", initial_value="draft", enum_values=["draft", "adopted"],
+                semantic_role="commitment_state",
+            ),
+            "adopted",
+            [None, None],
+        ),
+        (
+            _variable(
+                value_type="decimal", unit="unitless", scale=2, initial_value="0.00",
+                semantic_role="commitment_state",
+            ),
+            "1.25",
+            ["1.25", "0.00"],
+        ),
+    ],
+)
+def test_commitment_consensus_preserves_typed_values_and_canonical_delta_scale(
+    variable, target, expected_deltas
+):
+    config = _active_config(
+        variables=[variable],
+        rules=[_rule(
+            operation="set_if_expected", unit=variable["unit"],
+            adoption_policy="unanimous_round_participants",
+        )],
+    )
+    actions = [
+        _action(
+            config,
+            [_proposal(
+                operation="set_if_expected", unit=variable["unit"], requested_value=target,
+                expected_before=variable["initial_value"], event_key=f"adoption-{sequence}",
+            )],
+            sequence=sequence,
+        )
+        for sequence in (1, 2)
+    ]
+    result = _reduce(config, actions)
+    assert result.state_after == {"balance": target}
+    assert len(result.state_deltas) == 1
+    assert [receipt.applied_delta for receipt in result.adjudications] == expected_deltas
+    assert all(receipt.status == "verified" for receipt in result.adjudications)
 
 
 def test_aggregate_bounds_rejects_mixed_saturating_group_without_partial_effect():

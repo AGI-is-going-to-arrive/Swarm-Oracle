@@ -75,6 +75,21 @@ def authored_content(report: FullReport, language: str) -> ReportAuthoredContent
     return ReportAuthoredContent.model_validate(payload)
 
 
+def strip_domain_disclosure(
+    report: FullReport, payload: dict[str, Any], *, language: str,
+) -> dict[str, Any]:
+    """Keep deterministic state, units and caveats outside model translation."""
+    result = dict(payload)
+    if report.domain_consistency is None:
+        return result
+    prefix = report.domain_consistency.disclosure(language)
+    disclaimer = str(result.get("disclaimer") or "")
+    if not disclaimer.startswith(prefix):
+        raise ValueError("domain translation requires its canonical state disclosure")
+    result["disclaimer"] = disclaimer[len(prefix):].strip() or None
+    return result
+
+
 def report_text_fields(
     payload: dict[str, Any],
     *,

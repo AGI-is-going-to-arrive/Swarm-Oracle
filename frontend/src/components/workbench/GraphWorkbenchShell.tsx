@@ -36,6 +36,7 @@ export default function GraphWorkbenchShell({
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const [leftPct, setLeftPct] = useState(50);
+  const [activeInspection, setActiveInspection] = useState<'causal' | 'kg' | null>(null);
   const dragging = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -67,6 +68,14 @@ export default function GraphWorkbenchShell({
 
   const onDoubleClick = useCallback(() => {
     setLeftPct(50);
+  }, []);
+
+  const onDividerKeyDown = useCallback((event: React.KeyboardEvent) => {
+    const key = event.key;
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter'].includes(key)) return;
+    event.preventDefault();
+    setLeftPct(value => key === 'Home' ? MIN_PANEL_PCT : key === 'End' ? MAX_PANEL_PCT : key === 'Enter' ? 50
+      : Math.max(MIN_PANEL_PCT, Math.min(MAX_PANEL_PCT, value + (key === 'ArrowRight' ? 5 : -5))));
   }, []);
 
   const singlePanel = !isSplit;
@@ -124,6 +133,8 @@ export default function GraphWorkbenchShell({
             <CausalGraphBoard
               scenarioId={scenarioId}
               hideExport={isSplit}
+              inspectionActive={activeInspection !== 'kg'}
+              onNodeClick={() => setActiveInspection('causal')}
             />
           </Suspense>
         </section>
@@ -134,11 +145,14 @@ export default function GraphWorkbenchShell({
           data-testid="workbench-divider"
           onPointerDown={onPointerDown}
           onDoubleClick={onDoubleClick}
+          onKeyDown={onDividerKeyDown}
+          className="focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
           role="separator"
           aria-orientation="vertical"
           aria-valuenow={Math.round(leftPct)}
           aria-valuemin={MIN_PANEL_PCT}
           aria-valuemax={MAX_PANEL_PCT}
+          aria-valuetext={t('workbench.resize_value', { defaultValue: 'Causal {{left}}%, knowledge {{right}}%', left: Math.round(leftPct), right: Math.round(100 - leftPct) })}
           aria-label={t('workbench.resize_divider', 'Drag to resize panels')}
           tabIndex={0}
           style={{
@@ -185,6 +199,8 @@ export default function GraphWorkbenchShell({
               scenarioId={scenarioId}
               branchId={branchId}
               resizeKey={kgResizeKey}
+              inspectionActive={activeInspection !== 'causal'}
+              onNodeClick={() => setActiveInspection('kg')}
             />
           </Suspense>
         </section>

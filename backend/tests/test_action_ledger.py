@@ -41,6 +41,7 @@ from app.services.action_ledger import (
     _world_outcome_for_variable,
     build_action_ledger,
     project_domain_adjudications_v1,
+    project_report_domain_context_v1,
     project_scenario_domain_world_v1,
     project_world_outcomes_v1,
 )
@@ -197,6 +198,8 @@ def _seed_domain_projection(
     durable_status: SimulationActionStatus = SimulationActionStatus.VERIFIED,
     schema_proposal: dict | None = None,
     action_type: str = "POST",
+    message_content: str = "Spend the approved amount.",
+    participant_count: int = 1,
 ) -> dict[str, str]:
     from app.services.agent_runtime import finalize_domain_round_v1
     from app.services.runtime_lock import (
@@ -206,8 +209,17 @@ def _seed_domain_projection(
     )
     from app.services.simulation_actions import append_simulation_action
 
-    config = freeze_domain_schema_v1(schema_proposal or _domain_schema_proposal())
+    raw_schema = schema_proposal or _domain_schema_proposal()
+    config = freeze_domain_schema_v1(raw_schema)
     assert config.schema is not None and config.schema_hash is not None
+    # Frozen rules are sorted by ID; preserve the fixture's explicit action
+    # rule instead of accidentally selecting an unrelated threshold rule.
+    rule = next(
+        rule for rule in config.schema.rules if rule.rule_id == raw_schema["rules"][0]["rule_id"]
+    )
+    variable = next(
+        variable for variable in config.schema.variables if variable.variable_id == rule.variable_id
+    )
     state_before = initial_domain_state_v1(config.schema)
     revision_before = state_revision_v1(
         schema_hash=config.schema_hash,
@@ -220,12 +232,15 @@ def _seed_domain_projection(
         "input_state_revision": revision_before,
         "proposals": [
             {
-                "variable_id": "cash_balance",
-                "rule_id": "spend_budget",
-                "operation": "add_requested",
+                "variable_id": variable.variable_id,
+                "rule_id": rule.rule_id,
+                "operation": rule.operation,
                 "requested_value": requested_value,
-                "unit": "count",
-                "expected_before": None,
+                "unit": variable.unit,
+                "expected_before": (
+                    state_before[variable.variable_id]
+                    if rule.operation == "set_if_expected" else None
+                ),
                 "event_key": "cash-change-1",
             }
         ],
@@ -245,54 +260,93 @@ def _seed_domain_projection(
             title="Budget branch",
             status=BranchStatus.ACTIVE,
         )
-        agent = Agent(
-            scenario_id=scenario.id,
-            name="Treasurer",
-            role="Operator",
-            tier=AgentTier.CORE,
-        )
-        session.add_all([branch, agent])
+        agents = [
+            Agent(
+                scenario_id=scenario.id,
+                name="Treasurer" if index == 0 else f"Participant {index + 1}",
+                role="Operator",
+                tier=AgentTier.CORE,
+            )
+            for index in range(participant_count)
+        ]
+        session.add_all([branch, *agents])
         session.flush()
         round_row = Round(branch_id=branch.id, round_number=1)
         session.add(round_row)
         session.flush()
-        message = AgentMessage(
-            round_id=round_row.id,
-            agent_id=agent.id,
-            content="Spend the approved amount.",
-        )
-        session.add(message)
-        session.flush()
-        raw_action = {
-            "action_type": action_type,
-            "status": "verified",
-            "content": message.content if action_type != "IDLE" else None,
-        }
-        if action_type != "IDLE":
-            raw_action["payload"] = {"domain_world_v1": domain_group}
-        action = append_simulation_action(
-            session,
-            scenario_id=scenario.id,
-            branch_id=branch.id,
-            round_id=round_row.id,
-            round_number=1,
-            agent_id=agent.id,
-            message_id=message.id,
-            idempotency_key=f"domain:{message.id}",
-            action=raw_action,
-        )
-        if durable_status != SimulationActionStatus.VERIFIED:
-            action.status = durable_status
-            action.failure_code = "ACTION_UNAVAILABLE"
-            session.add(action)
+        parent_post = None
+        if action_type == "COMMENT":
+            source = Agent(
+                scenario_id=scenario.id, name="Policy agenda", role="World event",
+                source_type="world_event_source",
+            )
+            session.add(source)
+            session.flush()
+            parent_post = append_simulation_action(
+                session, scenario_id=scenario.id, branch_id=branch.id,
+                round_id=round_row.id, round_number=1, agent_id=source.id, message_id=None,
+                idempotency_key="domain:bootstrap-policy-agenda", _allow_bootstrap_post=True,
+                action={
+                    "action_type": "POST", "content": "Consider a departure extension.",
+                    "payload": {
+                        "bootstrap": True, "source_name": source.name,
+                        "published_at": None, "credibility_hint": None, "tags": [],
+                    },
+                },
+            )
+            assert parent_post.action_type == SimulationActionType.POST
+            assert parent_post.status == SimulationActionStatus.VERIFIED
+        actions = []
+        messages = []
+        for index, agent in enumerate(agents, 1):
+            message = AgentMessage(
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content=message_content,
+            )
+            session.add(message)
+            session.flush()
+            raw_action = {
+                "action_type": action_type,
+                "status": "verified",
+                "content": message.content if action_type != "IDLE" else None,
+            }
+            if action_type != "IDLE":
+                action_group = copy.deepcopy(domain_group)
+                action_group["proposals"][0]["event_key"] = f"cash-change-{index}"
+                raw_action["payload"] = {"domain_world_v1": action_group}
+            if action_type == "COMMENT":
+                assert parent_post is not None
+                raw_action["parent_action_id"] = parent_post.id
+                raw_action["target"] = {"kind": "post", "id": parent_post.id}
+            action = append_simulation_action(
+                session,
+                scenario_id=scenario.id,
+                branch_id=branch.id,
+                round_id=round_row.id,
+                round_number=1,
+                agent_id=agent.id,
+                message_id=message.id,
+                idempotency_key=f"domain:{message.id}",
+                action=raw_action,
+            )
+            assert action.action_type == SimulationActionType(action_type)
+            assert action.status == SimulationActionStatus.VERIFIED
+            if durable_status != SimulationActionStatus.VERIFIED:
+                action.status = durable_status
+                action.failure_code = "ACTION_UNAVAILABLE"
+                session.add(action)
+            actions.append(action)
+            messages.append(message)
         session.commit()
+        expected_agent_ids = tuple(sorted(agent.id for agent in agents))
         seeded = {
             "scenario_id": scenario.id,
             "branch_id": branch.id,
             "round_id": round_row.id,
-            "agent_id": agent.id,
-            "message_id": message.id,
-            "action_id": action.id,
+            "agent_id": agents[0].id,
+            "message_id": messages[0].id,
+            "action_id": actions[0].id,
             "schema_hash": config.schema_hash,
             "state_revision_before": revision_before,
         }
@@ -309,7 +363,7 @@ def _seed_domain_projection(
             branch_id=seeded["branch_id"],
             round_id=seeded["round_id"],
             round_number=1,
-            expected_agent_ids=(seeded["agent_id"],),
+            expected_agent_ids=expected_agent_ids,
             current_runtime_lease=lambda: lease,
         )
         assert result.status == "committed"
@@ -2454,6 +2508,135 @@ def test_numeric_set_delta_accepts_multiple_receipts_with_same_atomic_delta():
     assert projection["source_action_count"] == 2
 
 
+def _seed_unanimous_commitment_projection() -> dict[str, str]:
+    proposal = _domain_schema_proposal()
+    proposal["variables"][0].update({
+        "variable_id": "last_departure_delay", "label_en": "Last departure delay",
+        "label_zh": "末班车延后", "semantic_role": "commitment_state", "unit": "second",
+        "initial_value": "0", "maximum": "7200",
+    })
+    proposal["rules"][0].update({
+        "variable_id": "last_departure_delay", "rule_id": "adopt_delay",
+        "action_type": "COMMENT", "operation": "set_if_expected", "unit": "second",
+        "requested_minimum": None, "requested_maximum": None,
+        "adoption_policy": "unanimous_round_participants",
+    })
+    return _seed_domain_projection(
+        schema_proposal=proposal, requested_value="1800", action_type="COMMENT",
+        message_content="I support adopting a 30-minute departure extension.",
+        participant_count=3,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unanimous_commitment_survives_round_serialization_ledger_and_report():
+    from app.services.result_report import builder
+
+    seeded = _seed_unanimous_commitment_projection()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        branch = session.get(Branch, seeded["branch_id"])
+        assert scenario is not None and branch is not None
+        stored_round = (
+            scenario.parsed_context["agent_runtime_v1"]["branches"][branch.id]["rounds"]["1"]
+        )
+        assert stored_round["domain_state_after"] == {"last_departure_delay": "1800"}
+        assert [receipt["applied_delta"] for receipt in stored_round["domain_adjudications"]] == (
+            ["1800", "0", "0"]
+        )
+        world = project_scenario_domain_world_v1(session, scenario=scenario, branches=[branch])
+        context = project_report_domain_context_v1(
+            session, scenario=scenario, branch_id=branch.id, as_of_round=1,
+        )
+
+    branch_state = world["branch_states"][0]
+    assert branch_state["status"] == "active"
+    assert branch_state["values"] == [{"variable_id": "last_departure_delay", "value": "1800"}]
+    delta = branch_state["latest_round_deltas"][0]
+    assert delta["applied_delta"] == "1800"
+    assert delta["source_action_count"] == len(delta["sources"]) == 3
+    assert context is not None and context["status"] == "unverified"
+    assert context["values"][0]["value"] == "1800"
+    assert context["adjudication_count"] == 3
+    assert {receipt["action_id"] for receipt in context["adjudications"]} == (
+        set(delta["source_action_ids"])
+    )
+    assert all(receipt["status"] == "verified" for receipt in context["adjudications"])
+    ledger = build_action_ledger(seeded["scenario_id"], branch_id=seeded["branch_id"])
+    consequences = [
+        consequence for item in ledger["items"] for consequence in item["consequences"]
+        if consequence["type"] == "domain_adjudication"
+    ]
+    assert len(consequences) == 3
+    assert all(consequence["status"] == "verified" for consequence in consequences)
+    report = await builder.build_report(
+        seeded["scenario_id"], seeded["branch_id"], overrides=None, detail_level="brief",
+    )
+    assert report.domain_consistency is not None
+    assert report.domain_consistency.status == "unverified"
+    assert report.domain_consistency.values[0].value == "1800"
+    assert "1800 seconds" in report.verdict.disclaimer
+
+
+@pytest.mark.parametrize(
+    "tampering", ["multiplied_delta", "shifted_attribution", "duplicate_source"],
+)
+def test_unanimous_commitment_projection_rejects_tampered_receipts(tampering):
+    seeded = _seed_unanimous_commitment_projection()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        round_row = session.get(Round, seeded["round_id"])
+        assert scenario is not None and round_row is not None
+        config = validate_domain_world_config_v1(scenario.parsed_context["domain_world_v1"])
+        context = project_report_domain_context_v1(
+            session, scenario=scenario, branch_id=seeded["branch_id"], as_of_round=1,
+        )
+        assert context is not None and context["status"] == "unverified"
+        assert context["values"][0]["value"] == "1800"
+        assert len(context["adjudications"]) == 3
+        assert all(receipt["status"] == "verified" for receipt in context["adjudications"])
+        receipts = {
+            (receipt["action_id"], receipt["proposal_index"]): copy.deepcopy(receipt)
+            for receipt in context["adjudications"]
+        }
+        actions = session.exec(select(SimulationAction).where(
+            SimulationAction.scenario_id == scenario.id,
+        )).all()
+        parsed = copy.deepcopy(scenario.parsed_context)
+        stored_round = parsed["agent_runtime_v1"]["branches"][seeded["branch_id"]]["rounds"]["1"]
+        delta = stored_round["domain_state_deltas"][0]
+        if tampering == "duplicate_source":
+            delta["sources"].append(copy.deepcopy(delta["sources"][0]))
+        else:
+            values = (
+                ["1800", "1800", "1800"]
+                if tampering == "multiplied_delta" else ["0", "1800", "0"]
+            )
+            for index, receipt in enumerate(stored_round["domain_adjudications"]):
+                receipt["applied_delta"] = values[index]
+                key = (receipt["action_id"], receipt["proposal_index"])
+                receipts[key]["applied_delta"] = values[index]
+        assert _project_latest_delta(
+            delta, config=config, round_row=round_row,
+            state_before={"last_departure_delay": "0"},
+            state_revision_before=seeded["state_revision_before"],
+            state=stored_round["domain_state_after"],
+            state_revision_after=stored_round["domain_state_revision"],
+            verified_receipts=receipts, durable_actions={action.id: action for action in actions},
+        ) is None
+        scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+        rejected = project_report_domain_context_v1(
+            session, scenario=scenario, branch_id=seeded["branch_id"], as_of_round=1,
+        )
+
+    assert rejected is not None and rejected["status"] == "unavailable"
+    assert rejected["failure_code"] == "DOMAIN_BRANCH_SCOPE_INVALID"
+    assert rejected["values"] == []
+    assert rejected["adjudications"] == []
+
+
 def test_domain_receipt_rejects_cross_scenario_agent_orphan():
     seeded = _seed_domain_projection()
     engine = get_engine()
@@ -2513,7 +2696,7 @@ def test_world_outcome_refs_freeze_empty_and_count_truncation_shapes():
     )["related_claim_ids_truncated"] is True
 
 
-def test_world_outcome_refs_keep_three_earliest_stable_orders_before_caps():
+def test_world_outcome_refs_keep_source_orders_without_unproved_claim_links():
     config = freeze_domain_schema_v1(_domain_schema_proposal())
     assert config.schema is not None
     variable = config.schema.variables[0]
@@ -2592,11 +2775,9 @@ def test_world_outcome_refs_keep_three_earliest_stable_orders_before_caps():
     assert outcome["source_rule_ids"] == expected_rules[:16]
     assert outcome["source_rule_count"] == 17
     assert outcome["source_rule_ids_truncated"] is True
-    assert outcome["related_claim_ids"] == [
-        f"claim-{index:02d}" for index in range(16)
-    ]
-    assert outcome["related_claim_count"] == 18
-    assert outcome["related_claim_ids_truncated"] is True
+    assert outcome["related_claim_ids"] == []
+    assert outcome["related_claim_count"] == 0
+    assert outcome["related_claim_ids_truncated"] is False
     assert {
         "source_action_ids",
         "source_action_count",
@@ -2610,7 +2791,7 @@ def test_world_outcome_refs_keep_three_earliest_stable_orders_before_caps():
     }.issubset(outcome)
 
 
-def test_world_outcome_claims_intersect_only_published_verified_action_ids():
+def test_world_outcome_action_intersection_does_not_endorse_unsupported_numeric_claims():
     seeded = _seed_domain_projection()
     engine = get_engine()
     with Session(engine) as session:
@@ -2640,22 +2821,29 @@ def test_world_outcome_claims_intersect_only_published_verified_action_ids():
                         "action_ids": [f" {seeded['action_id']} "],
                     },
                     {
-                        "claim_id": "eligible",
+                        "claim_id": "unsupported-numeric-claim",
                         "branch_id": branch.id,
                         "action_ids": [seeded["action_id"]],
+                        "claim_text": "The final cash balance is 30.",
+                        "evidence_strength": "unsupported",
+                        "confidence": "low",
                     },
                     {
-                        "claim_id": "eligible",
+                        "claim_id": "strong-quote-is-not-value-proof",
                         "branch_id": branch.id,
                         "action_ids": [seeded["action_id"]],
+                        "claim_text": "The treasurer said the final balance is 30.",
+                        "evidence_strength": "strong",
+                        "confidence": "high",
                     },
                 ],
             },
         )
 
     outcome = projected["branches"][0]["outcomes"][0]
-    assert outcome["related_claim_ids"] == ["eligible"]
-    assert outcome["related_claim_count"] == 1
+    assert outcome["final_value"] == "7"
+    assert outcome["related_claim_ids"] == []
+    assert outcome["related_claim_count"] == 0
     assert outcome["related_claim_ids_truncated"] is False
 
 
@@ -2679,3 +2867,63 @@ def test_world_outcomes_fail_closed_when_active_scope_has_no_branches():
         "schema_hash": seeded["schema_hash"],
         "branches": [],
     }
+
+
+def test_report_domain_context_uses_replayed_state_and_terminal_adjudications():
+    seeded = _seed_domain_projection()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        context = project_report_domain_context_v1(
+            session, scenario=scenario, branch_id=seeded["branch_id"], as_of_round=1,
+        )
+
+    assert context is not None
+    assert context["status"] == "unverified"
+    assert context["epistemic_scope"] == "scenario_assumption"
+    assert context["values"][0]["value"] == "7"
+    assert context["state_revision"].startswith("sha256:")
+    assert context["adjudication_count"] == 1
+    assert context["adjudications_truncated"] is False
+    receipt = context["adjudications"][0]
+    assert receipt["status"] == "verified"
+    assert receipt["action_id"] == seeded["action_id"]
+    assert receipt["before"] == "10" and receipt["after"] == "7"
+    assert receipt["epistemic_scope"] == "scenario_assumption"
+
+
+def test_report_domain_context_does_not_publish_earlier_state_as_final():
+    seeded = _seed_domain_projection()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        session.add(Round(branch_id=seeded["branch_id"], round_number=2))
+        session.commit()
+        context = project_report_domain_context_v1(
+            session, scenario=scenario, branch_id=seeded["branch_id"], as_of_round=2,
+        )
+
+    assert context is not None
+    assert context["status"] == "unavailable"
+    assert context["failure_code"] == "DOMAIN_ROUND_INCOMPLETE"
+    assert context["values"] == []
+    assert context["adjudications"] == []
+
+
+def test_report_domain_context_rejects_tampered_committed_values():
+    seeded = _seed_domain_projection()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        parsed = json.loads(json.dumps(scenario.parsed_context))
+        domain_round = parsed["agent_runtime_v1"]["branches"][seeded["branch_id"]]["rounds"]["1"]
+        domain_round["domain_state_after"]["cash_balance"] = "30"
+        scenario.parsed_context = parsed
+        context = project_report_domain_context_v1(
+            session, scenario=scenario, branch_id=seeded["branch_id"], as_of_round=1,
+        )
+
+    assert context is not None
+    assert context["status"] == "unavailable"
+    assert context["failure_code"] == "DOMAIN_BRANCH_SCOPE_INVALID"
+    assert context["values"] == []

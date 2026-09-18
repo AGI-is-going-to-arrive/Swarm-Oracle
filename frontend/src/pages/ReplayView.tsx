@@ -60,7 +60,10 @@ function visibleMetadataFailureCode(code: unknown): string | null {
     : null;
 }
 
-function extractAgentsFromGraph(graph: CausalGraphResponse | null): ReplayAgentInfo[] {
+function extractAgentsFromGraph(
+  graph: CausalGraphResponse | null,
+  scenarioAgentNames: ReadonlyMap<string, string>,
+): ReplayAgentInfo[] {
   if (!graph) return [];
   const agentMap = new Map<string, ReplayAgentInfo>();
   for (const node of graph.nodes ?? []) {
@@ -69,7 +72,7 @@ function extractAgentsFromGraph(graph: CausalGraphResponse | null): ReplayAgentI
     if (!agentId || agentMap.has(agentId)) continue;
     const agentName = typeof payload.agent_name === 'string' && payload.agent_name.trim()
       ? payload.agent_name.trim()
-      : agentId;
+      : scenarioAgentNames.get(agentId) || agentId;
     agentMap.set(agentId, { id: agentId, name: agentName });
   }
   return [...agentMap.values()];
@@ -198,6 +201,7 @@ export function ReplayView() {
   const [trace, setTrace] = useState<ReplayTraceResponse | null>(null);
   const [graph, setGraph] = useState<CausalGraphResponse | null>(null);
   const [branchesInfo, setBranchesInfo] = useState<BranchInfo[]>([]);
+  const [scenarioAgentNames, setScenarioAgentNames] = useState<Map<string, string>>(() => new Map());
   const [loadingData, setLoadingData] = useState(true);
   const [error, setError] = useState<number | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -235,6 +239,7 @@ export function ReplayView() {
     setTrace(null);
     setGraph(null);
     setBranchesInfo([]);
+    setScenarioAgentNames(new Map());
     setResolvedScopeKey(null);
     setHighlightMessageId(null);
     setLoadMoreError(null);
@@ -280,8 +285,14 @@ export function ReplayView() {
       }
       if (scenarioResult.status === 'fulfilled') {
         setBranchesInfo(scenarioResult.value.branches ?? []);
+        setScenarioAgentNames(new Map(
+          (scenarioResult.value.agents ?? [])
+            .filter((agent) => typeof agent.name === 'string' && agent.name.trim())
+            .map((agent) => [agent.id, agent.name.trim()]),
+        ));
       } else {
         setBranchesInfo([]);
+        setScenarioAgentNames(new Map());
       }
       setResolvedScopeKey(requestScopeKey);
     } catch {
@@ -291,6 +302,7 @@ export function ReplayView() {
       setTrace(null);
       setGraph(null);
       setBranchesInfo([]);
+      setScenarioAgentNames(new Map());
       setResolvedScopeKey(requestScopeKey);
     } finally {
       if (isCurrentRequest()) {
@@ -368,7 +380,10 @@ export function ReplayView() {
     () => buildFrames(trace, graph),
     [trace, graph],
   );
-  const agents = useMemo(() => extractAgentsFromGraph(graph), [graph]);
+  const agents = useMemo(
+    () => extractAgentsFromGraph(graph, scenarioAgentNames),
+    [graph, scenarioAgentNames],
+  );
 
   const {
     frameIndex,
@@ -712,7 +727,7 @@ export function ReplayView() {
                 const agentId = typeof p.agent_id === 'string' ? p.agent_id : null;
                 const agentName = typeof p.agent_name === 'string' && p.agent_name.trim()
                   ? p.agent_name.trim()
-                  : (agentId ? agentId.slice(0, 8) : null);
+                  : (agentId ? scenarioAgentNames.get(agentId) || agentId.slice(0, 8) : null);
                 const content = typeof p.content === 'string' ? p.content : (node.label || '');
                 const emotion = typeof p.emotion === 'string' ? p.emotion : null;
                 const emotionMetadataUnavailable = p.emotion_metadata_status === 'unavailable';

@@ -19,7 +19,12 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
 }));
 
 vi.mock('./result/ResultReportPanel', () => ({
-  ResultReportPanel: () => <div data-testid="report-panel" />,
+  ResultReportPanel: ({ storyData, isReplayMode }: {
+    storyData?: { full_report?: { title?: string } };
+    isReplayMode?: boolean;
+  }) => <div data-testid="report-panel" data-readonly={String(isReplayMode)}>
+    {storyData?.full_report?.title}
+  </div>,
 }));
 
 vi.mock('../components/ProgressIndicator', () => ({
@@ -31,6 +36,9 @@ vi.mock('react-i18next', () => ({
     t: (key: string) => ({
       'result.report.fullReport': 'Full report',
       'result.report.backToOverview': 'Back',
+      'result.report.readPreviousFull': 'Read previous full analysis',
+      'result.report.returnCurrent': 'Return to current report',
+      'result.report.historyTitle': 'Previous full analysis',
     }[key] ?? key),
     i18n: { language: 'en' },
   }),
@@ -53,6 +61,30 @@ afterEach(() => {
 });
 
 describe('ResultReportView request authority', () => {
+  it('opens the bounded historical analysis read-only without replacing the current report', async () => {
+    const user = userEvent.setup();
+    getScenarioMock.mockResolvedValue({ id: 'one', status: 'done' });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'one', question: 'Current question', branches: [],
+      full_report: { title: 'Current brief', detail_level: 'brief', sections: [] },
+      historical_full_report: { title: 'Saved full analysis', detail_level: 'full', sections: [] },
+    });
+    render(
+      <MemoryRouter initialEntries={['/report/one']}>
+        <Routes><Route path="/report/:id" element={<ResultReportView />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('Current brief')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Read previous full analysis' }));
+    expect(screen.getByTestId('report-panel')).toHaveAttribute('data-readonly', 'true');
+    expect(screen.getByText('Saved full analysis')).toBeInTheDocument();
+    expect(screen.queryByText('Current brief')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Return to current report' }));
+    expect(screen.getByText('Current brief')).toBeInTheDocument();
+    expect(screen.getByTestId('report-panel')).toHaveAttribute('data-readonly', 'false');
+    expect(getStoryMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not let an old scenario response overwrite the new route', async () => {
     const user = userEvent.setup();
     const oldScenario = deferred<Record<string, unknown>>();

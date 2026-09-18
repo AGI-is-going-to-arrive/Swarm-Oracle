@@ -34,21 +34,30 @@
  * wire onClick in the FE-3-seq serial phase.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
   buildSessionHeaders,
+  getConversation,
+  getScenario,
+  getSessionBoundUserId,
+  getSessionPrincipalSubject,
+  getSessionToken,
+  SESSION_TOKEN_CHANGED_EVENT,
   type ConversationDetail,
+  type ConversationTurnDetail,
 } from '../../api/client';
 import { mapBackendErrorCode } from '../../lib/conversationStateMachine';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet';
 import { cn } from '../../lib/utils';
-import { useAgentConversation, type RegisteredStreamBubble } from '../../hooks/useAgentConversation';
+import { useAgentConversation, type RegisteredStreamBubble, type SettledConversationTurn } from '../../hooks/useAgentConversation';
 import { useDraftAutoSave } from '../../hooks/useDraftAutoSave';
 import { useNodeConversationTransport } from '../../hooks/useNodeConversationTransport';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { SafeMarkdown } from '../SafeMarkdown';
+import { isLocalLlmBaseUrl, loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
+import type { AgentConversationWSEvent } from '../../types';
 
 import { ConversationRecoveryBanner } from './ConversationRecoveryBanner';
 import { DraftRestoredBanner } from './DraftRestoredBanner';
@@ -145,6 +154,27 @@ export interface NodeConversationSheetProps {
    * Default: false.
    */
   showResultDeepenHint?: boolean;
+  restoreFocusTarget?: HTMLElement | null;
+  restoreFocusFallback?: RefObject<HTMLElement | null>;
+}
+
+type TranscriptTurn = Pick<ConversationTurnDetail, 'id' | 'role' | 'sequence' | 'status' | 'content'>;
+const HISTORY_PAGE_SIZE = 40;
+
+function mergeTranscript(current: TranscriptTurn[], incoming: TranscriptTurn[]): TranscriptTurn[] {
+  const turns = new Map(current.map(turn => [`${turn.sequence}:${turn.role}`, turn]));
+  for (const turn of incoming) {
+    if (turn.role !== 'user' && turn.role !== 'assistant') continue;
+    const key = `${turn.sequence}:${turn.role}`;
+    const previous = turns.get(key);
+    // A read started during streaming may settle after its terminal event.
+    if (previous && ['committed', 'done', 'aborted', 'error'].includes(previous.status)
+      && !['committed', 'done', 'aborted', 'error'].includes(turn.status)) continue;
+    turns.set(key, previous?.content && !turn.content && ['aborted', 'error'].includes(turn.status)
+      ? { ...turn, content: previous.content }
+      : turn);
+  }
+  return [...turns.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
 /**
@@ -172,7 +202,37 @@ function lowerSnap(current: NodeConversationSnapLevel): NodeConversationSnapLeve
   return SNAP_LEVELS[Math.max(idx - 1, 0)];
 }
 
+function subscribeConversationSession(notify: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === null || event.key === 'swarmoracle_session_token') notify();
+  };
+  window.addEventListener(SESSION_TOKEN_CHANGED_EVENT, notify);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    window.removeEventListener(SESSION_TOKEN_CHANGED_EVENT, notify);
+    window.removeEventListener('storage', onStorage);
+  };
+}
+
 export function NodeConversationSheet(props: NodeConversationSheetProps) {
+  const sessionToken = useSyncExternalStore(subscribeConversationSession, getSessionToken, () => '');
+  const [boundary, setBoundary] = useState({ token: sessionToken, version: 0 });
+  if (boundary.token !== sessionToken) {
+    setBoundary({ token: sessionToken, version: boundary.version + 1 });
+  }
+  const subject = getSessionPrincipalSubject(sessionToken);
+  const ownerScope = subject ? `owner:${encodeURIComponent(subject)}`
+    : `public:${encodeURIComponent(getSessionBoundUserId())}`;
+  // A token rotation or logout also invalidates the whole local conversation,
+  // even if the decoded subject is unchanged. Keys and drafts contain no token.
+  return <SessionConversationSheet key={`${boundary.version}:${props.scenarioId}`} {...props}
+    sessionToken={sessionToken} ownerScope={ownerScope} />;
+}
+
+function SessionConversationSheet(props: NodeConversationSheetProps & {
+  sessionToken: string;
+  ownerScope: string;
+}) {
   const {
     open,
     onOpenChange,
@@ -185,36 +245,102 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     onAbort,
     onResend,
     showResultDeepenHint = false,
+    restoreFocusTarget,
+    restoreFocusFallback,
+    sessionToken,
+    ownerScope,
   } = props;
+  const isCurrentSession = useCallback(() => getSessionToken() === sessionToken, [sessionToken]);
+  const ownsDetail = useCallback((detail: ConversationDetail) => {
+    const subject = getSessionPrincipalSubject(sessionToken);
+    return isCurrentSession() && (!subject || detail.owner_user_id === subject);
+  }, [isCurrentSession, sessionToken]);
   const { t } = useTranslation();
   const isMobile = useIsMobile(768);
   const {
     enabled: agentConversationEnabled,
     loading: capCheckLoading,
     error: capConversationError,
+    capabilities,
+    reload: reloadCapabilities,
   } = useCapabilityCheck('agent_conversation');
   // Disable input/send while the probe is loading or the feature is genuinely
   // off, but NOT when the probe itself errored — a probe failure shouldn't hard
   // disable the sheet; let the user attempt (the transport surfaces the real
   // FEATURE_DISABLED / error if the feature is actually unavailable).
-  const conversationHardDisabled = !agentConversationEnabled && !capConversationError;
+  const featureDisabled = !agentConversationEnabled && !capConversationError;
+  const contextKey = `${scenarioId}:${identityId ?? ''}:${origin?.nodeId ?? 'result'}:${origin?.branchId ?? ''}:${origin?.roundNumber ?? ''}:${initialThreadId ?? ''}`;
   const [threadState, setThreadState] = useState<{
+    contextKey: string;
     initialThreadId: string | null;
     threadId: string | null;
-  }>({ initialThreadId, threadId: initialThreadId });
-  const threadId = threadState.initialThreadId === initialThreadId
+  }>({ contextKey, initialThreadId, threadId: initialThreadId });
+  const threadId = threadState.contextKey === contextKey && threadState.initialThreadId === initialThreadId
     ? threadState.threadId
     : initialThreadId;
+  const currentThreadRef = useRef(threadId);
+  currentThreadRef.current = threadId;
   const setThreadId = useCallback((nextThreadId: string | null) => {
-    setThreadState({ initialThreadId, threadId: nextThreadId });
-  }, [initialThreadId]);
+    if (!isCurrentSession()) return;
+    currentThreadRef.current = nextThreadId;
+    setThreadState({ contextKey, initialThreadId, threadId: nextThreadId });
+  }, [contextKey, initialThreadId, isCurrentSession]);
   const lastSubmittedMessageRef = useRef<string | null>(null);
-  const originNodeId = origin?.nodeId ?? null;
-  const originNodeType = origin?.nodeType ?? null;
-  const originBranchId = origin?.branchId ?? null;
-  const originRoundNumber = origin?.roundNumber ?? null;
-  const originExcerpt = origin?.excerpt?.trim() || null;
+  const bubbleRef = useRef<StreamingBubbleApi | null>(null);
+  const closeRequestedRef = useRef(false);
+  const [historyContext, setHistoryContext] = useState<{ key: string; detail: ConversationDetail } | null>(null);
+  const selectedHistory = historyContext?.key === contextKey ? historyContext.detail : null;
+  const sameHistoryOrigin = selectedHistory?.origin_node_id === origin?.nodeId
+    && selectedHistory?.origin_branch_id === (origin?.branchId ?? null)
+    && selectedHistory?.origin_round_number === (origin?.roundNumber ?? null)
+    && selectedHistory?.agent_identity_id === (identityId ?? null);
+  const effectiveOrigin: NodeConversationOrigin | undefined = selectedHistory ? {
+    ...(sameHistoryOrigin ? origin : {}),
+    nodeId: selectedHistory.origin_node_id ?? '',
+    nodeType: selectedHistory.origin_node_type ?? 'conversation',
+    branchId: selectedHistory.origin_branch_id,
+    roundNumber: selectedHistory.origin_round_number,
+    ...(!sameHistoryOrigin ? { nodeLabel: selectedHistory.origin_node_id ?? undefined } : {}),
+  } : origin;
+  const originNodeId = effectiveOrigin?.nodeId ?? null;
+  const originNodeType = effectiveOrigin?.nodeType ?? null;
+  const originBranchId = effectiveOrigin?.branchId ?? null;
+  const originRoundNumber = effectiveOrigin?.roundNumber ?? null;
+  const originExcerpt = effectiveOrigin?.excerpt?.trim() || null;
   const isResultContext = showResultDeepenHint && (origin == null || origin.surface === 'result');
+
+  const [transcript, setTranscript] = useState<{ key: string; threadId: string | null; turns: TranscriptTurn[] }>({ key: contextKey, threadId, turns: [] });
+  const transcriptTurns = transcript.key === contextKey && transcript.threadId === threadId ? transcript.turns : [];
+  const [visibleTurnCount, setVisibleTurnCount] = useState(HISTORY_PAGE_SIZE);
+  const [pendingUser, setPendingUser] = useState<string | null>(null);
+  const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadError, setHistoryLoadError] = useState(false);
+  const historyEpochRef = useRef(0);
+  const submitInFlightRef = useRef(false);
+  const interactionEpochRef = useRef(0);
+  const appendTurns = useCallback((nextThreadId: string, turns: TranscriptTurn[]) => {
+    if (!isCurrentSession() || currentThreadRef.current !== nextThreadId) return;
+    setTranscript(previous => ({
+      key: contextKey, threadId: nextThreadId,
+      turns: mergeTranscript(previous.key === contextKey && previous.threadId === nextThreadId ? previous.turns : [], turns),
+    }));
+  }, [contextKey, isCurrentSession]);
+  const handleTurnStarted = useCallback((event: Extract<AgentConversationWSEvent, { type: 'turn_started' }>) => {
+    if (currentThreadRef.current !== event.thread_id) return;
+    const text = lastSubmittedMessageRef.current;
+    if (text) appendTurns(event.thread_id, [{ id: `user:${event.turn_id}`, role: 'user', sequence: event.sequence - 1, content: text, status: 'committed' }]);
+    setPendingUser(null);
+    setActiveStreamId(event.turn_id);
+  }, [appendTurns]);
+  const handleTurnSettled = useCallback((turn: SettledConversationTurn) => {
+    if (currentThreadRef.current !== turn.threadId) return;
+    appendTurns(turn.threadId, [{ id: turn.id, role: 'assistant', sequence: turn.sequence, content: turn.content, status: turn.status }]);
+    bubbleRef.current?.reset();
+    setActiveStreamId(null);
+    setHistoryRefresh(value => value + 1);
+  }, [appendTurns]);
 
   const {
     state: convState,
@@ -222,7 +348,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     dispatchWsEvent,
     registerStreamBubble,
     ariaLiveApi,
-  } = useAgentConversation({ threadId });
+  } = useAgentConversation({ threadId, onTurnStarted: handleTurnStarted, onTurnSettled: handleTurnSettled });
   const { announceRef: ariaLiveAnnounceRef, flushNow: flushAriaLiveNow } = ariaLiveApi;
 
   // Draft auto-save (per thread id, falling back to origin-scoped key).
@@ -230,9 +356,9 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     if (origin) {
       return `${scenarioId}:${origin.nodeId}:${origin.branchId ?? ''}:${origin.roundNumber ?? ''}`;
     }
-    return 'result';
+    return `${scenarioId}:result`;
   }, [origin, scenarioId]);
-  const draftKey = useMemo(() => `swarmoracle_draft:${threadId ?? originDraftScope}`, [threadId, originDraftScope]);
+  const draftKey = useMemo(() => `swarmoracle_draft:${ownerScope}:${threadId ? `${scenarioId}:thread:${threadId}` : originDraftScope}`, [ownerScope, scenarioId, threadId, originDraftScope]);
   const draft = useDraftAutoSave(draftKey);
 
   const [inputState, setInputState] = useState<{ draftKey: string; value: string | null }>({
@@ -241,12 +367,60 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   });
   const inputOverride = inputState.draftKey === draftKey ? inputState.value : null;
   const inputValue = inputOverride ?? draft.restored ?? '';
+  const latestInputRef = useRef({ draftKey, value: inputValue });
+  useEffect(() => { latestInputRef.current = { draftKey, value: inputValue }; }, [draftKey, inputValue]);
   const setInputValue = useCallback((nextValue: string) => {
+    latestInputRef.current = { draftKey, value: nextValue };
     setInputState({ draftKey, value: nextValue });
   }, [draftKey]);
   const [draftNoticeDismissed, setDraftNoticeDismissed] = useState<boolean>(false);
-  const [historyRestoredText, setHistoryRestoredText] = useState<string | null>(null);
   const sheetContentRef = useRef<HTMLDivElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const [readinessRefresh, setReadinessRefresh] = useState(0);
+  const [readiness, setReadiness] = useState<{ scenarioId: string; loading: boolean; configured: boolean | null }>({ scenarioId, loading: true, configured: null });
+  const providerPolicy = loadLlmProviderPolicy();
+  const completeByok = validateByok(providerPolicy).valid && Boolean(providerPolicy.baseUrl && providerPolicy.model
+    && (providerPolicy.apiKey || isLocalLlmBaseUrl(providerPolicy.baseUrl)));
+  const scopedReadiness = readiness.scenarioId === scenarioId ? readiness : { loading: true, configured: null };
+  const readinessLoading = scopedReadiness.loading && !completeByok;
+  const modelUnavailable = scopedReadiness.configured === false && !completeByok;
+  const readinessUnknown = !scopedReadiness.loading && scopedReadiness.configured === null && !completeByok
+    && capabilities?.llm_static_configured !== true;
+  const conversationHardDisabled = featureDisabled || modelUnavailable
+    || (readinessLoading && capabilities?.llm_configured === false);
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    setReadiness({ scenarioId, loading: true, configured: null });
+    void getScenario(scenarioId, { signal: controller.signal }).then(scenario => {
+      if (controller.signal.aborted || !isCurrentSession()) return;
+      setReadiness({ scenarioId, loading: false, configured: scenario.conversation_llm_configured ?? null });
+    }).catch(() => {
+      if (!controller.signal.aborted && isCurrentSession()) setReadiness({ scenarioId, loading: false, configured: null });
+    });
+    return () => controller.abort();
+  }, [open, scenarioId, readinessRefresh, isCurrentSession]);
+
+  useEffect(() => {
+    if (!open || !threadId) return;
+    const requestEpoch = ++historyEpochRef.current;
+    const controller = new AbortController();
+    setHistoryLoading(true);
+    setHistoryLoadError(false);
+    void getConversation(threadId, { signal: controller.signal }).then(detail => {
+      if (controller.signal.aborted || requestEpoch !== historyEpochRef.current || !isCurrentSession()) return;
+      if (detail.thread_id !== threadId || detail.scenario_id !== scenarioId) throw new Error('Invalid conversation scope');
+      if (!ownsDetail(detail)) throw new Error('Invalid conversation owner');
+      appendTurns(threadId, detail.turns);
+      if (detail.origin_node_id || detail.agent_identity_id) setHistoryContext({ key: contextKey, detail });
+    }).catch(() => {
+      if (!controller.signal.aborted && requestEpoch === historyEpochRef.current && isCurrentSession()) setHistoryLoadError(true);
+    }).finally(() => {
+      if (!controller.signal.aborted && requestEpoch === historyEpochRef.current && isCurrentSession()) setHistoryLoading(false);
+    });
+    return () => controller.abort();
+  }, [appendTurns, contextKey, historyRefresh, open, scenarioId, threadId, isCurrentSession, ownsDetail]);
 
   // Persist input value to sessionStorage (debounced inside hook).
   useEffect(() => {
@@ -264,8 +438,9 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     startConversation,
     streamTurn,
   } = useNodeConversationTransport({
+    sessionToken,
     scenarioId,
-    identityId,
+    identityId: selectedHistory ? selectedHistory.agent_identity_id : identityId,
     originNodeId,
     originNodeType,
     originBranchId,
@@ -289,21 +464,26 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   useEffect(() => {
     if (!open) {
       abortActiveRequest();
-      lastSubmittedMessageRef.current = null;
-      setHistoryRestoredText(null);
+      setHistoryContext(null);
     }
-  }, [abortActiveRequest, open]);
-
-  useEffect(() => {
-    setHistoryRestoredText(null);
-  }, [initialThreadId, originDraftScope, scenarioId]);
+    lastSubmittedMessageRef.current = null;
+    setPendingUser(null);
+    setActiveStreamId(null);
+    setBootstrapPending(false);
+    submitInFlightRef.current = false;
+    convDispatch(open && !capCheckLoading && featureDisabled ? { type: 'error', code: 'feature_disabled' } : { type: 'reset' });
+    return () => {
+      interactionEpochRef.current += 1;
+      historyEpochRef.current += 1;
+      abortActiveRequest();
+    };
+  }, [abortActiveRequest, contextKey, initialThreadId, open, convDispatch, capCheckLoading, featureDisabled]);
 
   useEffect(() => {
     flushAriaLiveNow();
   }, [flushAriaLiveNow, open]);
 
   // Stable bubble-ref callback; StrictMode idempotent.
-  const bubbleRef = useRef<StreamingBubbleApi | null>(null);
   const handleBubbleRef = useCallback(
     (api: StreamingBubbleApi | null) => {
       bubbleRef.current = api;
@@ -317,38 +497,48 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   );
 
   const handleSubmit = useCallback(async () => {
-    if (bootstrapPending) return;
+    if (!isCurrentSession() || !open || conversationHardDisabled || bootstrapPending || submitInFlightRef.current
+      || convState.turn === 'pending' || convState.turn === 'streaming') return;
     const text = inputValue.trim();
-    if (text.length === 0) return;
-    setHistoryRestoredText(null);
+    if (text.length === 0 || Array.from(text).length > 8000) return;
     lastSubmittedMessageRef.current = text;
     draft.save(text);
     if (onSubmit) {
       onSubmit(text);
       return;
     }
-    let accepted: boolean;
-    if (!threadId) {
-      setBootstrapPending(true);
-      try {
-        accepted = await startConversation(text);
-      } finally {
+    submitInFlightRef.current = true;
+    const epoch = ++interactionEpochRef.current;
+    setBootstrapPending(true);
+    setPendingUser(text);
+    try {
+      const accepted = threadId ? await streamTurn(threadId, text) : await startConversation(text);
+      if (epoch !== interactionEpochRef.current) return;
+      if (!accepted) setPendingUser(null);
+      if (!accepted) return;
+      const latestInput = latestInputRef.current;
+      if (latestInput.draftKey !== draftKey || latestInput.value.trim() === text) draft.discard();
+      if (latestInput.draftKey === draftKey && latestInput.value.trim() === text) setInputValue('');
+    } finally {
+      if (epoch === interactionEpochRef.current) {
+        submitInFlightRef.current = false;
         setBootstrapPending(false);
       }
-    } else {
-      accepted = await streamTurn(threadId, text);
     }
-    if (!accepted) return;
-    draft.discard();
-    setInputValue('');
-  }, [bootstrapPending, draft, inputValue, onSubmit, setInputValue, startConversation, streamTurn, threadId]);
+  }, [bootstrapPending, conversationHardDisabled, convState.turn, draft, draftKey, inputValue, onSubmit, open, setInputValue, startConversation, streamTurn, threadId, isCurrentSession]);
 
   const handleAbort = useCallback(async () => {
+    if (!isCurrentSession()) return;
     if (onAbort) {
       onAbort();
       return;
     }
     abortActiveRequest();
+    interactionEpochRef.current += 1;
+    submitInFlightRef.current = false;
+    setBootstrapPending(false);
+    setPendingUser(null);
+    convDispatch({ type: 'abort' });
     if (threadId) {
       try {
         await fetch(`/api/conversation/${encodeURIComponent(threadId)}/active`, {
@@ -359,18 +549,31 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
         // Best-effort network cleanup.
       }
     }
-    convDispatch({ type: 'abort' });
-  }, [abortActiveRequest, convDispatch, onAbort, threadId]);
+  }, [abortActiveRequest, convDispatch, onAbort, threadId, isCurrentSession]);
 
   const handleResend = useCallback(async () => {
+    if (!isCurrentSession() || !open || conversationHardDisabled || bootstrapPending || submitInFlightRef.current
+      || convState.turn === 'pending' || convState.turn === 'streaming') return;
     if (onResend) {
       onResend();
       return;
     }
     const lastMessage = lastSubmittedMessageRef.current?.trim();
     if (!lastMessage || !threadId) return;
-    await streamTurn(threadId, lastMessage);
-  }, [onResend, streamTurn, threadId]);
+    submitInFlightRef.current = true;
+    const epoch = ++interactionEpochRef.current;
+    setBootstrapPending(true);
+    setPendingUser(lastMessage);
+    try {
+      const accepted = await streamTurn(threadId, lastMessage);
+      if (!accepted && epoch === interactionEpochRef.current) setPendingUser(null);
+    } finally {
+      if (epoch === interactionEpochRef.current) {
+        submitInFlightRef.current = false;
+        setBootstrapPending(false);
+      }
+    }
+  }, [bootstrapPending, conversationHardDisabled, convState.turn, onResend, open, streamTurn, threadId, isCurrentSession]);
 
   const handleDiscardDraft = useCallback(() => {
     draft.discard();
@@ -380,20 +583,26 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
 
   const handleHistorySelect = useCallback(
     (detail: ConversationDetail) => {
-      // S2-1: Switch the sheet to the picked thread and replay the last
-      // assistant turn into the streaming bubble so it reads as restored.
+      if (detail.scenario_id !== scenarioId || !ownsDetail(detail)) return;
+      abortActiveRequest();
+      interactionEpochRef.current += 1;
+      historyEpochRef.current += 1;
+      submitInFlightRef.current = false;
+      setBootstrapPending(false);
+      setPendingUser(null);
+      setActiveStreamId(null);
       setThreadId(detail.thread_id);
+      setHistoryContext({ key: contextKey, detail });
+      setTranscript({ key: contextKey, threadId: detail.thread_id, turns: mergeTranscript([], detail.turns) });
+      setVisibleTurnCount(HISTORY_PAGE_SIZE);
+      lastSubmittedMessageRef.current = [...detail.turns].reverse().find(turn => turn.role === 'user')?.content ?? null;
       convDispatch({ type: 'reset' });
-      const lastAssistant = [...detail.turns]
-        .reverse()
-        .find((turn) => turn.role === 'assistant' && turn.content);
-      setHistoryRestoredText(lastAssistant?.content ?? null);
       const bubble = bubbleRef.current;
       if (bubble) {
         bubble.reset();
       }
     },
-    [convDispatch, setThreadId],
+    [abortActiveRequest, contextKey, convDispatch, scenarioId, setThreadId, ownsDetail],
   );
 
   // Mobile snap-point state (40/70/100 vh). Starts at 70 (default reading
@@ -469,7 +678,9 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const side = isMobile ? 'bottom' : 'right';
   const handleSheetOpenChange = useCallback((nextOpen: boolean) => {
     if (!nextOpen) {
+      closeRequestedRef.current = true;
       setThreadId(initialThreadId);
+      setHistoryContext(null);
       onClose?.();
     }
     onOpenChange(nextOpen);
@@ -491,8 +702,8 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
 
   const showRecovery = convState.turn === 'error' || convState.turn === 'recovering';
   const showEmpty =
-    convState.turn === 'idle' && inputValue.length === 0 && historyRestoredText === null;
-  const isStreaming = convState.turn === 'streaming';
+    convState.turn === 'idle' && inputValue.length === 0 && transcriptTurns.length === 0 && !pendingUser;
+  const isStreaming = convState.turn === 'streaming' || convState.turn === 'pending' || bootstrapPending;
   const isDone = convState.turn === 'done';
 
   return (
@@ -503,11 +714,28 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
         hideOverlay={!isMobile}
         onInteractOutside={handleDesktopInteractOutside}
         onEscapeKeyDown={handleSheetEscapeKeyDown}
+        onOpenAutoFocus={() => {
+          closeRequestedRef.current = false;
+          previousFocusRef.current = restoreFocusTarget?.isConnected ? restoreFocusTarget
+            : document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          const active = document.activeElement;
+          if (!closeRequestedRef.current && active instanceof HTMLElement && active !== document.body
+            && !sheetContentRef.current?.contains(active)) return;
+          const target = restoreFocusTarget?.isConnected ? restoreFocusTarget
+            : previousFocusRef.current?.isConnected ? previousFocusRef.current : restoreFocusFallback?.current;
+          if (target?.isConnected) {
+            target.focus();
+          }
+          closeRequestedRef.current = false;
+        }}
         data-testid="node-conversation-sheet"
         data-mobile={isMobile ? 'true' : 'false'}
         data-snap={isMobile ? snapLevel : undefined}
         className={cn(
-          'conv-sheet flex h-full flex-col',
+          'conv-sheet flex h-full min-h-0 flex-col overflow-hidden',
           isMobile
             ? cn(
                 'rounded-t-2xl pb-[env(safe-area-inset-bottom)]',
@@ -527,11 +755,12 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
             })}
             onClick={handleSnapCycle}
             className="mx-auto flex min-h-[44px] w-12 items-center justify-center"
+            style={{ flexShrink: 0 }}
           >
             <span className="h-1.5 w-full rounded-full bg-border-default group-hover:bg-text-muted" aria-hidden="true" />
           </button>
         ) : null}
-        <SheetHeader className="px-5 pb-3 pt-2">
+        <SheetHeader className="px-5 pb-3 pt-2" style={{ flexShrink: 0 }}>
           <SheetTitle className="font-heading text-center text-lg font-semibold tracking-tight text-[#292524]">
             {isResultContext
               ? t('conversation.sheet.result_title', { defaultValue: 'Result conversation' })
@@ -550,11 +779,20 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           </SheetDescription>
         </SheetHeader>
 
+        {/* Variable-height context and history share the bounded transcript scroll area. */}
+        <div
+          ref={scrollRegionRef}
+          data-testid="node-conversation-scroll-region"
+          data-no-drag="true"
+          aria-label={t('conversation.sheet.scroll_region_aria')}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
+          style={{ overscrollBehavior: 'contain' }}
+        >
         {/* Node context banner (origin metadata — floating card) */}
-        {origin ? <NodeContextBanner origin={origin} className="mx-4 mt-1 mb-2" /> : null}
+        {effectiveOrigin ? <NodeContextBanner origin={effectiveOrigin} className="mt-1 mb-2" /> : null}
 
         {/* S2-1: history reload */}
-        <div className="mx-4 mb-2">
+        <div className="mb-2">
           <ConversationHistoryPicker
             scenarioId={scenarioId}
             onSelect={handleHistorySelect}
@@ -567,24 +805,34 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
         ) : null}
         {!draft.available ? <DraftRestoredBanner variant="unavailable" /> : null}
 
-        {/* Transcript / stream region — drag-guarded */}
-        <div
-          ref={scrollRegionRef}
-          data-testid="node-conversation-scroll-region"
-          data-no-drag="true"
-          aria-label={t('conversation.sheet.scroll_region_aria')}
-          className="flex-1 overflow-y-auto px-4 py-3"
-        >
-          <div className={cn('conv-bubble conv-bubble--assistant', showEmpty && 'conv-bubble--hidden')}>
-            {historyRestoredText !== null ? (
-              <SafeMarkdown className="node-conversation-markdown">
-                {historyRestoredText}
-              </SafeMarkdown>
+        {!featureDisabled && (readinessLoading || modelUnavailable || readinessUnknown) ? (
+          <div role="status" data-testid="conversation-model-readiness" className="mb-2 text-sm">
+            <p>{t(`conversation.readiness.${readinessLoading ? 'checking' : modelUnavailable ? 'configuration_required' : 'unknown'}`)}</p>
+            {modelUnavailable ? <a href="/admin/setup">{t('conversation.readiness.configure')}</a> : null}
+            {!readinessLoading ? (
+              <button type="button" className="conv-btn" onClick={() => {
+                setReadinessRefresh(value => value + 1);
+                void reloadCapabilities?.();
+              }}>{t('conversation.readiness.retry')}</button>
             ) : null}
-            <div
-              aria-hidden={historyRestoredText !== null ? 'true' : undefined}
-              style={historyRestoredText !== null ? { display: 'none' } : undefined}
-            >
+          </div>
+        ) : null}
+
+        {/* Transcript / stream region — drag-guarded */}
+          {threadId && historyLoading ? <p role="status">{t('conversation.history.loading')}</p> : null}
+          {threadId && historyLoadError ? <p role="status">{t('conversation.history.load_failed')} <button type="button" onClick={() => setHistoryRefresh(value => value + 1)}>{t('conversation.history.retry')}</button></p> : null}
+          {transcriptTurns.length > visibleTurnCount ? <button type="button" className="conv-btn" onClick={() => setVisibleTurnCount(count => count + HISTORY_PAGE_SIZE)}>{t('conversation.transcript.load_earlier')}</button> : null}
+          <div className="flex flex-col gap-3" data-testid="node-conversation-transcript">
+            {transcriptTurns.slice(-visibleTurnCount).filter(turn => turn.id !== activeStreamId && (turn.content || ['error', 'aborted'].includes(turn.status))).map(turn => (
+              <article key={`${turn.sequence}:${turn.role}`} className={`conv-bubble conv-bubble--${turn.role}`} data-role={turn.role} data-turn-status={turn.status}>
+                <p className="mb-1 text-xs font-semibold">{t(`conversation.transcript.${turn.role}`)}</p>
+                <SafeMarkdown className="node-conversation-markdown">{turn.content}</SafeMarkdown>
+                {turn.status === 'aborted' || turn.status === 'error' ? <p className="mt-2 text-xs">{t(`conversation.transcript.${turn.status === 'aborted' ? 'aborted' : 'failed'}`)}</p> : null}
+              </article>
+            ))}
+            {pendingUser ? <article className="conv-bubble conv-bubble--user" data-role="user"><p className="mb-1 text-xs font-semibold">{t('conversation.transcript.user')}</p>{pendingUser}</article> : null}
+            <div className={cn('conv-bubble conv-bubble--assistant', !activeStreamId && 'conv-bubble--hidden')} aria-hidden={!activeStreamId || undefined}>
+              <p className="mb-1 text-xs font-semibold">{t('conversation.transcript.assistant')}</p>
               <StreamingBubbleIsolated onRef={handleBubbleRef} />
             </div>
           </div>
@@ -592,8 +840,8 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
             <EmptyStateQuickQuestions
               onSelect={setInputValue}
               variant={isResultContext ? 'result' : 'node'}
-              agentName={origin?.agentName}
-              origin={origin}
+              agentName={effectiveOrigin?.agentName}
+              origin={effectiveOrigin}
             />
           ) : null}
 
@@ -604,6 +852,29 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
               onRetry={() => convDispatch({ type: 'reset' })}
               onDiscard={() => convDispatch({ type: 'reset' })}
             />
+          ) : null}
+
+          {showResultHint ? (
+            <div
+              data-testid="result-deepen-hint"
+              role="status"
+              className="mt-2 rounded border border-purple-200/40 bg-purple-50 px-4 py-2.5 text-xs text-purple-700"
+            >
+              {t('result_conversation.deepen_hint', {
+                defaultValue: 'Great conversation! You can continue or come back anytime.',
+              })}
+            </div>
+          ) : null}
+
+          {isDone ? (
+            <button
+              type="button"
+              data-testid="node-conversation-cta-continue"
+              onClick={() => convDispatch({ type: 'reset' })}
+              className="conv-btn conv-btn--cta"
+            >
+              {t('conversation.cta.continue_chatting')}
+            </button>
           ) : null}
         </div>
 
@@ -622,6 +893,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           ref={inputRegionRef}
           data-no-drag="true"
           className="conv-input-bar conversation-input-glow"
+          style={{ flexShrink: 0 }}
         >
           <textarea
             data-testid="node-conversation-input"
@@ -632,7 +904,8 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleInputKeyDown}
             rows={2}
-            disabled={conversationHardDisabled}
+            maxLength={8000}
+            disabled={featureDisabled}
             className="conv-input-textarea"
           />
           <div className="flex gap-1.5">
@@ -658,31 +931,6 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
             )}
           </div>
         </div>
-
-        {/* Soft result-deepen hint after 3 completed turns */}
-        {showResultHint ? (
-          <div
-            data-testid="result-deepen-hint"
-            role="status"
-            className="mx-4 mt-2 rounded border border-purple-200/40 bg-purple-50 px-4 py-2.5 text-xs text-purple-700"
-          >
-            {t('result_conversation.deepen_hint', {
-              defaultValue: 'Great conversation! You can continue or come back anytime.',
-            })}
-          </div>
-        ) : null}
-
-        {/* Continue-chatting CTA shown post-done */}
-        {isDone ? (
-          <button
-            type="button"
-            data-testid="node-conversation-cta-continue"
-            onClick={() => convDispatch({ type: 'reset' })}
-            className="conv-btn conv-btn--cta"
-          >
-            {t('conversation.cta.continue_chatting')}
-          </button>
-        ) : null}
 
         {/* Debug tag: thread + scenario + identity (sr-only for e2e) */}
         <span className="sr-only" data-testid="node-conversation-meta">

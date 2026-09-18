@@ -8,7 +8,7 @@ import {
   within,
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 import {
   parseAgentPackBytes,
@@ -177,10 +177,16 @@ function twoAgentPackInput() {
   return pack;
 }
 
-function renderAgentLibrary() {
+function LibraryFocusStateProbe() {
+  const location = useLocation();
+  return <output data-testid="library-focus-state">{JSON.stringify(location.state)}</output>;
+}
+
+function renderAgentLibrary(state: unknown = null) {
   return render(
-    <MemoryRouter initialEntries={['/agents']}>
+    <MemoryRouter initialEntries={[{ pathname: '/agents', state }]}>
       <AgentLibrary />
+      <LibraryFocusStateProbe />
     </MemoryRouter>,
   );
 }
@@ -411,6 +417,43 @@ describe('AgentLibrary', () => {
     window.history.replaceState(null, '', '/agents');
     vi.restoreAllMocks();
   });
+  it('exposes an accessible edit route for custom agents without changing generated profiles', () => {
+    mockAgentStore.identities = [
+      libraryAgent('custom/id', 'Ada'),
+      libraryAgent('generated-1', 'Historical Agent', 'Historian', 'generated'),
+    ];
+    renderAgentLibrary();
+
+    expect(screen.getByRole('link', { name: 'Edit Ada' })).toHaveAttribute('href', '/agents/edit/custom%2Fid');
+    expect(screen.queryByRole('link', { name: 'Edit Historical Agent' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'View details' })).toHaveLength(2);
+  });
+
+  it('does not expose edit routes when custom agents are disabled', () => {
+    mockCapability.enabled = false;
+    mockAgentStore.identities = [libraryAgent('custom-1', 'Ada')];
+    renderAgentLibrary();
+    expect(screen.queryByRole('link', { name: 'Edit Ada' })).not.toBeInTheDocument();
+  });
+
+  it('restores edit focus after the card renders and consumes the return intent once', () => {
+    mockAgentStore.identities = [libraryAgent('custom-1', 'Revised Ada')];
+    renderAgentLibrary({ focusAgentId: 'custom-1', focusOwnerId: 'test_user' });
+    expect(screen.getByRole('link', { name: 'Edit Revised Ada' })).toHaveFocus();
+    expect(screen.getByTestId('library-focus-state')).toHaveTextContent('null');
+    const search = screen.getByRole('searchbox');
+    search.focus();
+    fireEvent.change(search, { target: { value: 'Ada' } });
+    expect(search).toHaveFocus();
+  });
+
+  it('discards return focus from another owner', () => {
+    mockAgentStore.identities = [libraryAgent('custom-1', 'Revised Ada')];
+    renderAgentLibrary({ focusAgentId: 'custom-1', focusOwnerId: 'other-owner' });
+    expect(screen.getByRole('link', { name: 'Edit Revised Ada' })).not.toHaveFocus();
+    expect(screen.getByTestId('library-focus-state')).toHaveTextContent('null');
+  });
+
   it('renders localized empty state copy', () => {
     render(
       <MemoryRouter initialEntries={['/agents']}>
@@ -1092,5 +1135,88 @@ describe('AgentLibrary', () => {
     expect(dialog).not.toHaveTextContent(error.message);
     expect(mockApi.importAgentPack).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('dialog', { name: 'Review Agent Pack' })).toBeInTheDocument();
+    if (_label === 'whole-pack conflict') {
+      expect(within(dialog).getByRole('button', { name: 'Import 2 Agents' })).toBeDisabled();
+      expect(within(dialog).getByRole('alert')).toHaveTextContent('Choose a different pack');
+    } else {
+      expect(within(dialog).getByRole('button', { name: 'Import 2 Agents' })).toBeEnabled();
+    }
+  });
+
+  it('blocks the same validated pack after conflict until genuinely different content is selected', async () => {
+    mockApi.isApiError.mockReturnValue(true);
+    mockApi.importAgentPack.mockRejectedValueOnce({ status: 409, code: 'AGENT_PACK_CONFLICT' });
+    mockApi.importAgentPack.mockResolvedValueOnce({
+      success: true, identity_ids: ['new-ada', 'new-grace'], imported_count: 2,
+    });
+    renderAgentLibrary();
+    const original = twoAgentPackInput();
+    const dialog = openAgentPackPastePreview(original);
+    const submit = within(dialog).getByRole('button', { name: 'Import 2 Agents' });
+    fireEvent.click(submit);
+    await within(dialog).findByRole('alert');
+    expect(submit).toBeDisabled();
+    fireEvent.submit(submit.closest('form')!);
+    expect(mockApi.importAgentPack).toHaveBeenCalledTimes(1);
+
+    const equivalent = {
+      agents: original.agents, title: original.title.trim(), exported_at: original.exported_at,
+      schema_version: original.schema_version, format: original.format,
+    };
+    fireEvent.change(within(dialog).getByLabelText('Agent Pack JSON'), {
+      target: { value: JSON.stringify(equivalent, null, 2) },
+    });
+    expect(submit).toBeDisabled();
+
+    const sameFile = new File([], 'another-filename.json', { type: 'application/json' });
+    Object.defineProperty(sameFile, 'arrayBuffer', {
+      value: async () => new TextEncoder().encode(JSON.stringify(equivalent)).buffer,
+    });
+    await act(async () => {
+      fireEvent.change(within(dialog).getByTestId('agent-pack-file-input'), {
+        target: { files: [sameFile] },
+      });
+    });
+    expect(submit).toBeDisabled();
+    fireEvent.submit(submit.closest('form')!);
+    expect(mockApi.importAgentPack).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(within(dialog).getByLabelText('Agent Pack JSON'), {
+      target: { value: '{"agents":' },
+    });
+    expect(submit).toBeDisabled();
+    const changed = { ...original, agents: original.agents.map((agent) => ({
+      ...agent, name: `New ${agent.name.trim()}`,
+    })) };
+    const changedFile = new File([JSON.stringify(changed)], 'new-content.json', {
+      type: 'application/json',
+    });
+    fireEvent.change(within(dialog).getByTestId('agent-pack-file-input'), {
+      target: { files: [changedFile] },
+    });
+    await within(dialog).findByText('New Ada');
+    expect(submit).toBeEnabled();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(submit);
+    await waitFor(() => expect(mockApi.importAgentPack).toHaveBeenCalledTimes(2));
+    expect(mockApi.importAgentPack).toHaveBeenLastCalledWith(expect.objectContaining({
+      agents: expect.arrayContaining([expect.objectContaining({ name: 'New Ada' })]),
+    }));
+  });
+
+  it('allows a manual retry of the same pack after an unknown network outcome', async () => {
+    mockApi.importAgentPack.mockRejectedValueOnce(new Error('offline'));
+    mockApi.importAgentPack.mockResolvedValueOnce({
+      success: true, identity_ids: ['ada', 'grace'], imported_count: 2,
+    });
+    renderAgentLibrary();
+    const dialog = openAgentPackPastePreview();
+    const submit = within(dialog).getByRole('button', { name: 'Import 2 Agents' });
+    fireEvent.click(submit);
+    await within(dialog).findByRole('alert');
+    expect(submit).toBeEnabled();
+    expect(mockApi.importAgentPack).toHaveBeenCalledTimes(1);
+    fireEvent.click(submit);
+    await waitFor(() => expect(mockApi.importAgentPack).toHaveBeenCalledTimes(2));
   });
 });

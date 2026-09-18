@@ -45,6 +45,16 @@ export interface UseAgentConversationOptions {
   threadId?: string | null;
   /** Optional debounceMs override for aria-live. */
   ariaLiveDebounceMs?: number;
+  onTurnStarted?: (event: Extract<AgentConversationWSEvent, { type: 'turn_started' }>) => void;
+  onTurnSettled?: (turn: SettledConversationTurn) => void;
+}
+
+export interface SettledConversationTurn {
+  id: string;
+  threadId: string;
+  sequence: number;
+  content: string;
+  status: 'committed' | 'aborted' | 'error';
 }
 
 export interface UseAgentConversationApi {
@@ -73,6 +83,9 @@ export function useAgentConversation(
   const bubbleRegistryRef = useRef<Map<string, RegisteredStreamBubble>>(new Map());
   const activeTurnIdRef = useRef<string | null>(null);
   const activeTurnBufferRef = useRef<string>('');
+  const activeTurnMetaRef = useRef<{ threadId: string; sequence: number } | null>(null);
+  const lifecycleRef = useRef(options);
+  useEffect(() => { lifecycleRef.current = options; }, [options]);
   const ariaLiveApi = useStreamingAriaLive({ debounceMs: options?.ariaLiveDebounceMs });
   const {
     appendToken: appendAriaLiveToken,
@@ -101,6 +114,7 @@ export function useAgentConversation(
     (mode: 'preserve' | 'reset' = 'reset') => {
       activeTurnIdRef.current = null;
       activeTurnBufferRef.current = '';
+      activeTurnMetaRef.current = null;
       if (mode === 'reset') {
         resetAriaLive();
       }
@@ -108,12 +122,25 @@ export function useAgentConversation(
     [resetAriaLive],
   );
 
+  const settleActiveTurn = useCallback((status: SettledConversationTurn['status']) => {
+    const id = activeTurnIdRef.current;
+    const meta = activeTurnMetaRef.current;
+    if (id && meta) {
+      lifecycleRef.current?.onTurnSettled?.({
+        id, ...meta, content: activeTurnBufferRef.current, status,
+      });
+    }
+  }, []);
+
   const dispatch = useCallback<UseAgentConversationApi['dispatch']>((action) => {
+    if (action.type === 'abort' || action.type === 'error') {
+      settleActiveTurn(action.type === 'abort' ? 'aborted' : 'error');
+    }
     if (action.type === 'abort' || action.type === 'error' || action.type === 'reset') {
       clearActiveTurn('reset');
     }
     setState((prev) => conversationReducer(prev, action));
-  }, [clearActiveTurn]);
+  }, [clearActiveTurn, settleActiveTurn]);
 
   const handleTokenDelta = useCallback(
     (turnId: string, delta: string) => {
@@ -137,9 +164,11 @@ export function useAgentConversation(
           const turnId = event.turn_id;
           activeTurnIdRef.current = turnId;
           activeTurnBufferRef.current = '';
+          activeTurnMetaRef.current = { threadId: event.thread_id, sequence: event.sequence };
           // Reset bubble for this turn.
           getRegisteredBubble(turnId)?.reset();
           resetAriaLive();
+          lifecycleRef.current?.onTurnStarted?.(event);
           setState((prev) => conversationReducer(prev, { type: 'submit' }));
           break;
         }
@@ -160,16 +189,19 @@ export function useAgentConversation(
           break;
         }
 
+        case 'turn_aborted':
         case 'turn_completed': {
           if (activeTurnIdRef.current !== event.turn_id) {
             break;
           }
           if (event.status === 'committed') {
             getRegisteredBubble(event.turn_id)?.finalize(activeTurnBufferRef.current);
+            settleActiveTurn('committed');
             clearActiveTurn('preserve');
             completeAriaLive();
             setState((prev) => conversationReducer(prev, { type: 'commit' }));
           } else {
+            settleActiveTurn('aborted');
             clearActiveTurn('reset');
             setState((prev) => conversationReducer(prev, { type: 'abort' }));
           }
@@ -181,6 +213,7 @@ export function useAgentConversation(
             break;
           }
           const code: RecoveryCode = mapBackendErrorCode(event.code);
+          settleActiveTurn('error');
           clearActiveTurn('reset');
           setState((prev) =>
             conversationReducer(prev, { type: 'error', code, message: event.message }),
@@ -192,7 +225,7 @@ export function useAgentConversation(
           break;
       }
     },
-    [clearActiveTurn, completeAriaLive, getRegisteredBubble, handleTokenDelta, resetAriaLive],
+    [clearActiveTurn, completeAriaLive, getRegisteredBubble, handleTokenDelta, resetAriaLive, settleActiveTurn],
   );
 
   // Listen for offline/online browser events.

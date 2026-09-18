@@ -100,6 +100,36 @@ vi.mock('@antv/g6', () => {
 import KGGraphBoard from './KGGraphBoard';
 import type { GraphPayload } from '../../hooks/useScenarioGraph';
 
+it('shows a recoverable filter-empty state while retaining the graph container', async () => {
+  setupGraphData(4);
+  const user = userEvent.setup();
+  render(<KGGraphBoard scenarioId="s1" />);
+  const canvas = screen.getByTestId('kg-graph-board-canvas');
+  await user.type(screen.getByTestId('kg-graph-board-search'), 'unmatched-query');
+  expect(screen.getByTestId('kg-graph-board-no-matches')).toHaveTextContent('No nodes match');
+  expect(screen.getByTestId('kg-graph-board-minimap')).not.toBeVisible();
+  await user.click(screen.getByRole('button', { name: 'Clear search and filters' }));
+  expect(screen.queryByTestId('kg-graph-board-no-matches')).not.toBeInTheDocument();
+  expect(screen.getByTestId('kg-graph-board-canvas')).toBe(canvas);
+});
+
+it('culls labels in a measured narrow panel and reveals the keyboard-focused node', () => {
+  const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(480);
+  const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600);
+  try {
+    setupGraphData(9);
+    render(<KGGraphBoard scenarioId="s1" />);
+    const readNodes = () => getGraphDataUpdates().at(-1)?.nodes as Array<{ id: string; style: { labelText?: string } }>;
+    expect(readNodes().every(node => node.style.labelText === undefined)).toBe(true);
+    fireEvent.keyDown(screen.getByTestId('kg-graph-board-canvas'), { key: 'ArrowRight' });
+    expect(readNodes().find(node => node.id === 'n0')?.style.labelText).toBeTruthy();
+    expect(readNodes().filter(node => node.style.labelText)).toHaveLength(1);
+  } finally {
+    width.mockRestore();
+    height.mockRestore();
+  }
+});
+
 afterEach(() => {
   cleanup();
   hoisted.mockT.mockClear();
@@ -497,7 +527,10 @@ describe('KGGraphBoard', () => {
         const user = userEvent.setup();
         render(<KGGraphBoard scenarioId="s1" />);
         act(() => simulateNodeClick({ x: 100, y: 200 }, 'n0'));
+        expect(screen.queryByTestId('node-conversation-sheet')).not.toBeInTheDocument();
+        await user.click(screen.getByTestId('node-detail-ask'));
         expect(screen.getByTestId('node-conversation-sheet')).toHaveTextContent('n0');
+        expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
 
         const search = screen.getByTestId('kg-graph-board-search');
         await user.type(search, 'Node 1');

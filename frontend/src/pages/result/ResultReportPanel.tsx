@@ -11,6 +11,7 @@ import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
 import { PremortemAnalysisBlock } from './PremortemAnalysisBlock';
 import { isLocalLlmBaseUrl, loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
+import { formatDomainUnitValue } from '../../lib/domainWorld';
 import {
   consumeResultReportStream,
   ReportStreamInterruptedError,
@@ -20,6 +21,7 @@ import type {
   FullReportTruncatedMarker,
   InterviewEvidenceEntry,
   ReportEvidence,
+  ReportDomainConsistency,
   ReportSectionFailureReason,
   ReportTier,
   Scenario,
@@ -42,6 +44,53 @@ interface Props {
   isZh?: boolean;
   isReplayMode?: boolean;
   scenarioStatus?: Scenario['status'];
+  scenarioLlmConfigured?: boolean | null;
+}
+
+function ReportDomainStateDetails({
+  state,
+  language,
+  historical,
+}: {
+  state: ReportDomainConsistency;
+  language: 'zh' | 'en';
+  historical: boolean;
+}) {
+  const { t } = useTranslation();
+  const isZh = language === 'zh';
+  return (
+    <details className="report-domain-state" lang={language}>
+      <summary>{t(historical
+        ? 'result.report.historicalDomainState'
+        : 'result.report.domainStateTitle')}</summary>
+      <p>{t('result.report.domainStateUnverified')}</p>
+      {state.status === 'unavailable' ? (
+        <p role="status">{t('result.report.domainStateUnavailable')}</p>
+      ) : (
+        <>
+          <p>{t('result.report.domainStateRound', { round: state.as_of_round })}</p>
+          <dl className="report-domain-state__values">
+            {state.values.map((value) => {
+              const scale = typeof value.value === 'string'
+                ? (/^-?\d+\.(\d+)$/.exec(value.value)?.[1].length ?? 0)
+                : 0;
+              return (
+                <div key={value.variable_id}>
+                  <dt>
+                    {isZh ? value.label_zh : value.label_en}
+                    <span>{t(value.semantic_role === 'commitment_state'
+                      ? 'result.report.domainAdoptedDecision'
+                      : 'result.report.domainModeledState')}</span>
+                  </dt>
+                  <dd>{formatDomainUnitValue(value.value, value.unit, scale, isZh)}</dd>
+                </div>
+              );
+            })}
+          </dl>
+        </>
+      )}
+    </details>
+  );
 }
 
 export type ReportContentLanguage = 'zh' | 'en';
@@ -447,6 +496,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   isZh,
   isReplayMode,
   scenarioStatus,
+  scenarioLlmConfigured,
 }: Props & { isZh: boolean; isReplayMode: boolean }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -494,7 +544,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     || (Boolean(providerPolicy.model.trim()) && isLocalLlmBaseUrl(providerPolicy.baseUrl));
   const canGenerateReport = !isReplayMode && isEnabled
     && (scenarioStatus === undefined || scenarioStatus === 'done')
-    && (capabilities?.llm_configured !== false || hasByok);
+    && ((scenarioLlmConfigured ?? capabilities?.llm_configured) !== false || hasByok);
 
   const isGenerating = !pollStalled
     && ((!isReportStale && sourceReport?.status === 'generating') || localGenerating);
@@ -1396,6 +1446,13 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         </div>
       )}
       <div className="report-panel-body" lang={reportContentLanguage}>
+        {sourceReport?.domain_consistency && (
+          <ReportDomainStateDetails
+            state={sourceReport.domain_consistency}
+            language={isZh ? 'zh' : 'en'}
+            historical={isReportStale}
+          />
+        )}
         {variant === 'inline' ? (
           <>
             {!isReportStale && !isBrief && (
@@ -1665,6 +1722,8 @@ export const ResultReportPanel = React.memo(function ResultReportPanel(props: Pr
   const isZh = props.isZh !== undefined ? props.isZh : context.isZh;
   const isReplayMode = props.isReplayMode !== undefined ? props.isReplayMode : context.isReplayMode;
   const scenarioStatus = props.scenarioStatus !== undefined ? props.scenarioStatus : context.scenario?.status;
+  const scenarioLlmConfigured = props.scenarioLlmConfigured !== undefined
+    ? props.scenarioLlmConfigured : context.scenario?.conversation_llm_configured;
 
   return (
     <ResultReportPanelInner
@@ -1674,6 +1733,7 @@ export const ResultReportPanel = React.memo(function ResultReportPanel(props: Pr
       isZh={isZh}
       isReplayMode={isReplayMode}
       scenarioStatus={scenarioStatus}
+      scenarioLlmConfigured={scenarioLlmConfigured}
     />
   );
 });

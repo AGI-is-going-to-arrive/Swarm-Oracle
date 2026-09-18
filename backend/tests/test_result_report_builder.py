@@ -7348,6 +7348,7 @@ async def test_simulator_preserves_opaque_api_key_for_report_generation(monkeypa
     )
 
     secret = _OpaqueStr("sk-report-secret")
+    monkeypatch.setattr(simulator_module.settings, "LLM_REASONING_EFFORT", "low")
     await run_simulation(
         scenario_id,
         ws_callback=fake_ws_callback,
@@ -7371,7 +7372,7 @@ async def test_simulator_preserves_opaque_api_key_for_report_generation(monkeypa
         "'model': 'model-a', 'temperature': 0.2, 'requests_per_minute': 17, "
         "'tokens_per_minute': 1700, 'concurrency': 3, "
         "'supports_structured_outputs_override': False, "
-        "'supports_native_search_override': True}"
+        "'supports_native_search_override': True, 'reasoning_effort': 'low'}"
     )
 
 
@@ -8221,6 +8222,218 @@ def test_automatic_brief_report_preserves_an_existing_full_analysis():
     assert _persisted_report(scenario_id) == original
 
 
+def test_stale_full_report_allows_current_brief_and_retains_one_historical_full():
+    scenario_id = _seed_report_scenario()
+    report = asyncio.run(builder.build_report(scenario_id, "branch-a", overrides=None,
+                                             detail_level="brief"))
+    full = report.model_copy(update={"detail_level": "full"})
+    builder._persist_report_payload(scenario_id, full.model_dump(mode="json"))
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        old_fingerprint = scenario.parsed_context[builder.REPORT_SCOPE_FINGERPRINT_KEY]
+        session.add(Round(id="replay-round-3", branch_id="branch-a", round_number=3))
+        session.add(AgentMessage(
+            id="replay-message-3", round_id="replay-round-3", agent_id="agent-planner",
+            content="The replay result now requires a different pilot.",
+        ))
+        session.commit()
+
+    result = asyncio.run(builder.build_report(scenario_id, "branch-a", overrides=None,
+                                             detail_level="brief"))
+
+    assert result.detail_level == "brief"
+    assert result.status == "complete"
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        context = scenario.parsed_context
+        current = builder.report_result_fingerprint(session, scenario_id)
+        assert current != old_fingerprint
+        assert context[builder.REPORT_SCOPE_FINGERPRINT_KEY] == current
+        assert context["full_report"]["detail_level"] == "brief"
+        assert context["full_report_history"] == {
+            "report": full.model_dump(mode="json"), "result_fingerprint": old_fingerprint,
+        }
+    # Another scope replacement overwrites the one snapshot, never appends a
+    # history list or nests older reports inside the new snapshot.
+    next_full = result.model_copy(update={"detail_level": "full"})
+    builder._persist_report_payload(scenario_id, next_full.model_dump(mode="json"))
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.question += " Revised assumptions."
+        session.add(scenario)
+        session.commit()
+    asyncio.run(builder.build_report(scenario_id, "branch-a", overrides=None, detail_level="brief"))
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        history = scenario.parsed_context["full_report_history"]
+        assert set(history) == {"report", "result_fingerprint"}
+        assert history["report"] == next_full.model_dump(mode="json")
+        assert history["result_fingerprint"] == current
+
+
+@pytest.mark.parametrize("status", ["generating", "failed", "cancelled"])
+def test_placeholder_does_not_return_stale_full_report(status):
+    scenario_id = _seed_report_scenario()
+    report = asyncio.run(builder.build_report(scenario_id, "branch-a", overrides=None,
+                                             detail_level="brief"))
+    full = report.model_copy(update={"detail_level": "full"})
+    builder._persist_report_payload(scenario_id, full.model_dump(mode="json"))
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.question += " New result scope."
+        session.add(scenario)
+        session.commit()
+
+    placeholder = builder._persist_placeholder_report_if_absent(
+        scenario_id, "branch-a", status=status,
+    )
+
+    assert placeholder.status == status
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        assert scenario.parsed_context[builder.REPORT_SCOPE_FINGERPRINT_KEY] == (
+            builder.report_result_fingerprint(session, scenario_id)
+        )
+        assert scenario.parsed_context["full_report_history"]["report"] == (
+            full.model_dump(mode="json")
+        )
+
+
+def _seed_conflicting_domain_report() -> dict[str, str]:
+    from tests.test_action_ledger import _domain_schema_proposal, _seed_domain_projection
+
+    proposal = _domain_schema_proposal()
+    proposal["variables"][0].update({
+        "variable_id": "last_departure_delay", "label_en": "Last departure delay",
+        "label_zh": "末班车延后", "semantic_role": "commitment_state", "unit": "second",
+        "maximum": "7200", "initial_value": "0",
+    })
+    proposal["rules"][0].update({
+        "variable_id": "last_departure_delay", "rule_id": "adopt_delay", "unit": "second",
+        "operation": "set_if_expected", "requested_minimum": None, "requested_maximum": None,
+        "adoption_policy": "unanimous_round_participants",
+    })
+    seeded = _seed_domain_projection(
+        schema_proposal=proposal, requested_value="7200",
+        message_content="We adopted a 30-minute extension to the last departure.",
+    )
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        branch = session.get(Branch, seeded["branch_id"])
+        assert scenario is not None and branch is not None
+        scenario.question = "How long is the adopted last-departure extension?"
+        scenario.parsed_context = {
+            **scenario.parsed_context,
+            "result_quality": {"question_answer": "The adopted delay is 30 minutes."},
+        }
+        branch.story = branch.insight = "The adopted delay is 30 minutes."
+        session.add_all([scenario, branch])
+        session.commit()
+    return seeded
+
+
+@pytest.mark.parametrize("detail_level", ["brief", "full"])
+def test_narrative_30_minutes_cannot_be_high_confidence_against_7200_second_state(
+    monkeypatch, detail_level,
+):
+    seeded = _seed_conflicting_domain_report()
+    prompts: list[str] = []
+
+    async def fake_llm(prompt: str, **_kwargs):
+        prompts.append(prompt)
+        if prompt.startswith("REPORT_OUTLINE"):
+            return _outline_payload(["timeline"])
+        if prompt.startswith("REPORT_SECTION_REACT"):
+            return _section_payload("timeline", body="The adopted delay is 30 minutes.")
+        if prompt.startswith("REPORT_INTERVIEWS"):
+            return {"action": "interview_agents", "interview_evidence": []}
+        raise RuntimeError("No external provider call in this regression")
+
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+    monkeypatch.setattr(builder.settings, "REPORT_MIN_SECTIONS", 1)
+    result = asyncio.run(builder.build_report(
+        seeded["scenario_id"], seeded["branch_id"], overrides=None, detail_level=detail_level,
+    ))
+
+    assert result.status == "complete"
+    assert result.domain_consistency is not None
+    assert result.domain_consistency.status == "unverified"
+    assert result.domain_consistency.values[0].value == "7200"
+    assert result.domain_consistency.values[0].unit == "second"
+    assert result.verdict.analytic_confidence.level == "low"
+    assert "7200 seconds" in result.verdict.disclaimer
+    assert "last_departure_delay" not in result.verdict.disclaimer
+    assert "adopted simulation decision" in result.verdict.disclaimer
+    assert "unimplemented proposal or an inconsistent account" in result.verdict.disclaimer
+    assert "scenario assumptions" in result.verdict.disclaimer
+    assert result.evidence[0].quote == (
+        "We adopted a 30-minute extension to the last departure."
+    )
+    if detail_level == "full":
+        assert prompts
+        assert all("DOMAIN_STATE_CONSISTENCY" in prompt for prompt in prompts)
+        assert all('"after":"7200"' in prompt for prompt in prompts)
+    else:
+        assert prompts == []
+    payload = result.model_dump(mode="json")
+    payload["verdict"]["analytic_confidence"]["level"] = "high"
+    with pytest.raises(ValueError, match="unverified domain narrative requires low"):
+        validate_full_report_payload(payload)
+    payload["verdict"]["analytic_confidence"]["level"] = "low"
+    payload["verdict"]["disclaimer"] = "The model is consistent."
+    with pytest.raises(ValueError, match="canonical state disclosure"):
+        validate_full_report_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("stored", "override", "server", "expected"),
+    [("low", None, "high", "low"), ("low", "none", "high", "none"),
+     (None, None, "low", "low"), (None, "high", "low", "high")],
+)
+def test_full_report_model_phases_use_resolved_reasoning_effort(
+    monkeypatch, stored, override, server, expected,
+):
+    from app.services import llm_client
+
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.parsed_context = {**scenario.parsed_context, "reasoning_effort": stored}
+        session.add(scenario)
+        session.commit()
+    monkeypatch.setattr(llm_client.settings, "LLM_REASONING_EFFORT", server)
+    efforts: dict[str, str | None] = {}
+
+    async def fake_llm(prompt: str, **kwargs):
+        phase = prompt.splitlines()[0]
+        efforts[phase] = kwargs.get("reasoning_effort")
+        if phase == "REPORT_OUTLINE":
+            return _outline_payload(["timeline"])
+        if phase == "REPORT_SECTION_REACT":
+            return _section_payload("timeline")
+        if phase == "REPORT_INTERVIEWS":
+            return {"action": "interview_agents", "interview_evidence": []}
+        raise RuntimeError("Use deterministic optional-section fallback")
+
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+    result = asyncio.run(builder.build_report(
+        scenario_id, "branch-a", overrides={"reasoning_effort": override},
+    ))
+
+    assert result.status == "complete"
+    assert {"REPORT_OUTLINE", "REPORT_SECTION_REACT", "REPORT_INTERVIEWS", "REPORT_INDICATORS"} <= (
+        efforts.keys()
+    )
+    assert set(efforts.values()) == {expected}
+
+
 def test_claim_reference_only_fragments_and_boilerplate_do_not_inflate_denominator():
     section = ReportSection(
         id="reference-fragments", title="Evidence", title_i18n=I18nText(zh="证据", en="Evidence"),
@@ -8330,6 +8543,61 @@ async def _mock_report_translation(prompt: str, **kwargs):
             for record in records
         ]
     }
+
+
+def test_conflicting_domain_report_translation_keeps_deterministic_state_disclosure(monkeypatch):
+    import re
+
+    seeded = _seed_conflicting_domain_report()
+    source = asyncio.run(builder.build_report(
+        seeded["scenario_id"], seeded["branch_id"], overrides=None, detail_level="brief",
+    ))
+    assert source.domain_consistency is not None
+    original_evidence = [item.model_dump(mode="json") for item in source.evidence]
+    calls: list[str] = []
+
+    async def malicious_translate(prompt: str, **_kwargs):
+        calls.append(prompt)
+        # The attack preserves every numeric/name/quote token but changes the
+        # surrounding units and certainty. Deterministic state copy must never
+        # be among these model-authored records.
+        assert "Round 1 recorded state" not in prompt
+        assert "adopted simulation decision" not in prompt
+        start = prompt.rfind('[{"id": "text_')
+        records, _ = json.JSONDecoder().raw_decode(prompt[start:])
+        return {"translations": [
+            {
+                "id": record["id"],
+                "text": "已经执行并确认完全一致，数值全部按分钟理解。 "
+                + " ".join(re.findall(r"\[\[REPORT_KEEP_[^\]\s]+\]\]", record["text"])),
+            }
+            for record in records
+        ]}
+
+    monkeypatch.setattr(builder, "llm_call_json", malicious_translate)
+    result = asyncio.run(builder.build_report(
+        seeded["scenario_id"], seeded["branch_id"], overrides=None, target_language="zh",
+    ))
+
+    assert calls
+    translated = result.authored_content_i18n["zh"]
+    canonical = source.domain_consistency.disclosure("zh")
+    assert translated.disclaimer.startswith(canonical)
+    assert "7200 秒" in canonical
+    assert "last_departure_delay" not in canonical
+    assert "模拟已采纳决策" in canonical
+    assert "叙述与状态的一致性未核实" in canonical
+    assert result.domain_consistency == source.domain_consistency
+    assert result.verdict.analytic_confidence.level == "low"
+    assert [item.model_dump(mode="json") for item in result.evidence] == original_evidence
+    for corrupted in (
+        translated.disclaimer.replace("秒", "分钟"),
+        translated.disclaimer.replace("叙述与状态的一致性未核实", "叙述与状态完全一致"),
+    ):
+        payload = result.model_dump(mode="json")
+        payload["authored_content_i18n"]["zh"]["disclaimer"] = corrupted
+        with pytest.raises(ValueError, match="domain translation requires its canonical"):
+            validate_full_report_payload(payload)
 
 
 def test_report_translation_is_on_demand_and_preserves_original_report_and_evidence(monkeypatch):

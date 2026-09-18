@@ -3,7 +3,7 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 
 import { AgentWorkshopView } from './AgentWorkshopView';
 import { useAgentStore } from '../stores/agentStore';
@@ -73,12 +73,17 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+function LibraryReturnProbe() {
+  const location = useLocation();
+  return <><div>Returned to library</div><output data-testid="library-return-state">{JSON.stringify(location.state)}</output></>;
+}
+
 const workshopTree = (route = '/agents/new') => (
   <MemoryRouter initialEntries={[route]}>
     <Routes>
       <Route path="/agents/new" element={<AgentWorkshopView />} />
-      <Route path="/agents/:id/edit" element={<AgentWorkshopView />} />
-      <Route path="/agents" element={<div>Returned to library</div>} />
+      <Route path="/agents/edit/:id" element={<AgentWorkshopView />} />
+      <Route path="/agents" element={<LibraryReturnProbe />} />
     </Routes>
   </MemoryRouter>
 );
@@ -161,13 +166,14 @@ describe('AgentWorkshopView', () => {
     expect(await screen.findByText('Returned to library')).toBeInTheDocument();
     expect(mockApi.createAgent).toHaveBeenCalledOnce();
     expect(useAgentStore.getState().identities).toEqual([existingAgent, created]);
+    expect(screen.getByTestId("library-return-state")).toHaveTextContent("null");
   });
 
   it('updates an edited identity without losing the home selection', async () => {
     useAgentStore.getState().toggleSelection('existing');
     const edited = { ...existingAgent, display_name: 'Revised name' };
     mockApi.listAgentIdentities.mockResolvedValueOnce([existingAgent]).mockResolvedValueOnce([edited]);
-    renderView('/agents/existing/edit');
+    renderView('/agents/edit/existing');
     await waitFor(() => expect(screen.getByLabelText(/Display Name/i)).toHaveValue('Existing Agent'));
     fireEvent.change(screen.getByLabelText(/Display Name/i), { target: { value: 'Revised name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -175,6 +181,9 @@ describe('AgentWorkshopView', () => {
     expect(await screen.findByText('Returned to library')).toBeInTheDocument();
     expect(useAgentStore.getState().identities).toEqual([edited]);
     expect([...useAgentStore.getState().selectedIds]).toEqual(['existing']);
+    expect(JSON.parse(screen.getByTestId('library-return-state').textContent ?? '{}')).toEqual({
+      focusAgentId: 'existing', focusOwnerId: 'test_user',
+    });
   });
 
   it('refreshes shared identities when a document import completes', async () => {
@@ -238,10 +247,10 @@ describe('AgentWorkshopView', () => {
 
   it('keeps a load error translated after language switching without refetching the form', async () => {
     mockApi.listAgentIdentities.mockRejectedValueOnce(new Error('private identity lookup details'));
-    const view = renderView('/agents/existing/edit');
+    const view = renderView('/agents/edit/existing');
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load agents.');
     languageState.current = 'zh';
-    view.rerender(workshopTree('/agents/existing/edit'));
+    view.rerender(workshopTree('/agents/edit/existing'));
     expect(screen.getByRole('alert')).toHaveTextContent('无法加载角色。');
     expect(mockApi.listAgentIdentities).toHaveBeenCalledOnce();
   });

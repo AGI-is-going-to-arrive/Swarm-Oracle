@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.models.agent_conversation import AgentConversationThread, AgentConversationTurn
+from app.models.checkpoint import FactionEvent
 from app.models.database import (
     Agent,
     AgentMessage,
     Branch,
+    BranchStatus,
     Round,
     Scenario,
     ScenarioStatus,
@@ -21,6 +24,7 @@ from app.models.database import (
 )
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
 from app.models.model_profile import ModelProfile
+from app.services import conversation_service as service
 from app.services.conversation_service import (
     _build_prompt,
     _load_prompt_context,
@@ -277,7 +281,7 @@ def _seed_scenario_with_branch(
     return scenario.id, branch.id
 
 
-def test_load_prompt_context_drops_cross_scenario_branch_id_from_transcript():
+def test_load_prompt_context_rejects_cross_scenario_branch_id():
     """H1: a thread that names a branch from another scenario must NOT leak
     the foreign-scenario transcript through ``_summarize_round_transcripts``.
 
@@ -316,14 +320,9 @@ def test_load_prompt_context_drops_cross_scenario_branch_id_from_transcript():
             latest_status="idle",
         )
 
-        context = _load_prompt_context(session, thread)
-
-    assert context.branch_summary is None, (
-        "Foreign-scenario branch must be blanked, not summarized"
-    )
-    assert context.round_transcripts == (), (
-        "Foreign-scenario rounds must NOT be summarized into the prompt"
-    )
+        with pytest.raises(HTTPException) as exc_info:
+            _load_prompt_context(session, thread)
+        assert exc_info.value.detail["code"] == "BRANCH_NOT_FOUND"
 
     # Sanity check: the same thread anchored at the *correct* scenario does
     # surface its transcript, proving the guard is the only thing dropping it.
@@ -509,6 +508,7 @@ async def test_stream_assistant_turn_rehydrates_profile_from_scenario_context(mo
     assert captured["scope"] == {
         "quota_key": "user:conv-owner",
         "purpose": "agent_conversation",
+        "reasoning_effort": "low",
         "requests_per_minute": 41,
         "tokens_per_minute": 4100,
         "concurrency": 7,
@@ -738,8 +738,8 @@ async def test_stream_assistant_turn_abort_during_fallback_does_not_commit_done(
         _llm_stream_factory=_empty_stream,
     )
 
-    with pytest.raises(asyncio.CancelledError):
-        _ = [event async for event in stream]
+    events = [event async for event in stream]
+    assert [event["event"] for event in events] == ["turn_started", "turn_aborted"]
 
     assert fallback_entered.is_set()
     assert fallback_cancelled.is_set()
@@ -814,8 +814,8 @@ async def test_stream_assistant_turn_abort_before_fallback_skips_provider(monkey
         _llm_stream_factory=_empty_stream,
     )
 
-    with pytest.raises(asyncio.CancelledError):
-        _ = [event async for event in stream]
+    events = [event async for event in stream]
+    assert [event["event"] for event in events] == ["turn_started", "turn_aborted"]
 
     assert fallback_calls == []
 
@@ -825,3 +825,498 @@ async def test_stream_assistant_turn_abort_before_fallback_skips_provider(monkey
     assert turn is not None
     assert turn.status == "aborted"
     assert turn.content != "fallback answer that must not be requested"
+
+
+@pytest.fixture
+def coherent_origin():
+    with Session(get_engine()) as session:
+        scenario_id, branch_a = _seed_scenario_with_branch(
+            session, user_id="origin-owner", transcript_marker="ancestor-round-one",
+        )
+        branch_b = Branch(scenario_id=scenario_id, title="Unrelated branch")
+        session.add(branch_b)
+        session.flush()
+        session.add_all([
+            Round(id="origin-a-r2", branch_id=branch_a, round_number=2),
+            Round(id="origin-b-r1", branch_id=branch_b.id, round_number=1),
+        ])
+        actor = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).first()
+        assert actor is not None
+        session.add(AgentMessage(
+            round_id="origin-a-r2", agent_id=actor.id, content="parent-post-fork-secret",
+        ))
+        snapshot = GraphSnapshot(
+            owner_type="scenario", owner_id=scenario_id, graph_kind="causal_review",
+        )
+        session.add(snapshot)
+        session.flush()
+        node = GraphNode(
+            snapshot_id=snapshot.id, node_key="origin-key", node_type="event",
+            round_number=1, label="Ancestor event",
+            payload_json=json.dumps({"branch_id": branch_a, "agent_name": actor.name}),
+        )
+        session.add(node)
+        session.commit()
+        return {
+            "scenario_id": scenario_id, "origin_branch_id": branch_a,
+            "origin_round_number": 1, "origin_node_id": node.id, "origin_node_type": "event",
+            "branch_b": branch_b.id, "actor_id": actor.id, "snapshot_id": snapshot.id,
+        }
+
+
+def _start_at_origin(origin, **changes):
+    coordinates = {key: value for key, value in origin.items()
+                   if key.startswith("origin_") or key == "scenario_id"}
+    coordinates.update(changes)
+    return create_thread_with_first_turn(
+        **coordinates, owner_user_id="origin-owner", agent_identity_id=None,
+        first_user_content="Explain the selected event.",
+    )
+
+
+@pytest.mark.parametrize("conflict", ["branch", "round", "type", "missing_node"])
+def test_origin_conflicts_fail_at_start_and_hydration(coherent_origin, conflict):
+    changes = {
+        "branch": {"origin_branch_id": coherent_origin["branch_b"]},
+        "round": {"origin_round_number": 999},
+        "type": {"origin_node_type": "stance_shift"},
+        "missing_node": {"origin_node_id": "missing-authoritative-node"},
+    }[conflict]
+    with pytest.raises(HTTPException) as start_error:
+        _start_at_origin(coherent_origin, **changes)
+    assert start_error.value.status_code in {400, 404}
+    with Session(get_engine()) as session:
+        assert session.exec(select(AgentConversationThread)).all() == []
+        coordinates = {key: value for key, value in coherent_origin.items()
+                       if key.startswith("origin_") or key == "scenario_id"}
+        coordinates.update(changes)
+        historical = AgentConversationThread(owner_user_id="origin-owner", **coordinates)
+        with pytest.raises(HTTPException) as hydrate_error:
+            _load_prompt_context(session, historical)
+    assert hydrate_error.value.detail["code"] == start_error.value.detail["code"]
+
+
+def test_origin_key_is_canonicalized_and_graph_deletion_fails_closed(coherent_origin):
+    outcome = _start_at_origin(coherent_origin, origin_node_id="origin-key")
+    assert outcome.thread.origin_node_id == coherent_origin["origin_node_id"]
+    with Session(get_engine()) as session:
+        node = session.get(GraphNode, coherent_origin["origin_node_id"])
+        session.delete(node)
+        session.add(GraphNode(
+            snapshot_id=coherent_origin["snapshot_id"], node_key="origin-key",
+            node_type="event", round_number=2,
+            payload_json=json.dumps({"branch_id": coherent_origin["origin_branch_id"]}),
+        ))
+        session.commit()
+        with pytest.raises(HTTPException) as exc_info:
+            _load_prompt_context(session, outcome.thread)
+        assert exc_info.value.detail["code"] == "ORIGIN_NODE_NOT_FOUND"
+
+
+def test_descendant_scope_allows_ancestor_node_and_excludes_parent_future(coherent_origin):
+    with Session(get_engine()) as session:
+        child = Branch(
+            scenario_id=coherent_origin["scenario_id"],
+            parent_branch_id=coherent_origin["origin_branch_id"], fork_round=1,
+            title="Descendant scope",
+        )
+        session.add(child)
+        session.flush()
+        session.add(Round(branch_id=child.id, round_number=2))
+        session.commit()
+        child_id = child.id
+    outcome = _start_at_origin(coherent_origin, origin_branch_id=child_id)
+    with Session(get_engine()) as session:
+        context = _load_prompt_context(session, outcome.thread)
+    assert "Descendant scope" in context.branch_summary
+    assert "ancestor-round-one" in "\n".join(context.round_transcripts)
+    assert "parent-post-fork-secret" not in "\n".join(context.round_transcripts)
+    assert len(context.round_transcripts) == 1
+
+
+def test_self_contained_replay_rejects_source_branch_node(coherent_origin):
+    with Session(get_engine()) as session:
+        replay = Branch(
+            scenario_id=coherent_origin["scenario_id"],
+            parent_branch_id=coherent_origin["origin_branch_id"], fork_round=1,
+            replay_kind="resume", title="Self-contained replay",
+        )
+        session.add(replay)
+        session.flush()
+        session.add(Round(branch_id=replay.id, round_number=1))
+        session.commit()
+        replay_id = replay.id
+    with pytest.raises(HTTPException) as exc_info:
+        _start_at_origin(coherent_origin, origin_branch_id=replay_id)
+    assert exc_info.value.detail["code"] == "INVALID_CONVERSATION_ORIGIN"
+
+
+def test_fork_target_and_projected_outcome_keep_authoritative_round(coherent_origin):
+    with Session(get_engine()) as session:
+        child = Branch(
+            scenario_id=coherent_origin["scenario_id"],
+            parent_branch_id=coherent_origin["origin_branch_id"], fork_round=1,
+            status=BranchStatus.COMPLETED, title="Fork target",
+        )
+        session.add(child)
+        session.flush()
+        session.add(Round(branch_id=child.id, round_number=2))
+        fork = GraphNode(
+            snapshot_id=coherent_origin["snapshot_id"], node_key="fork-node",
+            node_type="fork", round_number=1,
+            payload_json=json.dumps({
+                "branch_id": child.id, "source_branch_id": coherent_origin["origin_branch_id"],
+            }),
+        )
+        session.add(fork)
+        session.commit()
+        child_id, fork_id = child.id, fork.id
+    for node_id, node_type in ((fork_id, "fork"), (f"outcome:{child_id}", "outcome")):
+        outcome = _start_at_origin(
+            coherent_origin, origin_branch_id=child_id, origin_node_id=node_id,
+            origin_node_type=node_type,
+        )
+        with Session(get_engine()) as session:
+            context = _load_prompt_context(session, outcome.thread)
+        assert "ancestor-round-one" in "\n".join(context.round_transcripts)
+        assert "parent-post-fork-secret" not in "\n".join(context.round_transcripts)
+
+
+def test_result_agent_without_graph_keeps_existing_parsed_history_fallback():
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Archived result", user_id="origin-owner", status=ScenarioStatus.DONE,
+            parsed_context={"agents": [{
+                "id": "archived-agent", "name": "Historian", "role": "Witness",
+                "persona": "Remembers the original outcome.",
+            }]},
+        )
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+    outcome = _start_at_origin({
+        "scenario_id": scenario_id, "origin_branch_id": None, "origin_round_number": None,
+        "origin_node_id": "agent:archived-agent", "origin_node_type": "agent",
+    })
+    with Session(get_engine()) as session:
+        context = _load_prompt_context(session, outcome.thread)
+    assert context.agent_name == "Historian"
+    assert context.agent_persona == "Remembers the original outcome."
+    assert context.round_transcripts == ()
+    with pytest.raises(HTTPException):
+        _start_at_origin({
+            "scenario_id": scenario_id, "origin_branch_id": None, "origin_round_number": None,
+            "origin_node_id": "agent:unknown-agent", "origin_node_type": "agent",
+        })
+
+
+def test_faction_event_is_pinned_and_hydrated_from_owned_durable_event(coherent_origin):
+    with Session(get_engine()) as session:
+        event = FactionEvent(
+            scenario_id=coherent_origin["scenario_id"],
+            branch_id=coherent_origin["origin_branch_id"], round_number=1,
+            actor_agent_id=coherent_origin["actor_id"], faction_key="faction-a",
+            event_type="betrayal", payload_json='{"shift": 0.7}',
+        )
+        session.add(event)
+        session.commit()
+        event_id = event.id
+    outcome = _start_at_origin(
+        coherent_origin, origin_node_id=coherent_origin["actor_id"],
+        origin_node_type="faction_event:betrayal",
+    )
+    assert outcome.thread.origin_node_id == f"faction-event:{event_id}"
+    with Session(get_engine()) as session:
+        context = _load_prompt_context(session, outcome.thread)
+    assert '"shift": 0.7' in context.node_summary
+    assert "ancestor-round-one" in "\n".join(context.round_transcripts)
+
+
+async def _lease_test_stream(factory):
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="Durable stream lease", status=ScenarioStatus.DONE)
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+    outcome = create_thread_with_first_turn(
+        scenario_id=scenario_id, owner_user_id=None, agent_identity_id=None,
+        origin_branch_id=None, origin_round_number=None, origin_node_id=None, origin_node_type=None,
+        first_user_content="hello",
+    )
+    stream = await stream_assistant_turn(
+        thread_id=outcome.thread.id, assistant_turn_id=outcome.assistant_turn.id,
+        new_user_content="hello", owner_user_id=None,
+        overrides=service.LLMOverrides(None, None, "test-model", False),
+        _llm_stream_factory=factory,
+    )
+    return outcome, stream
+
+
+async def test_active_stream_past_five_minutes_keeps_durable_lease(monkeypatch):
+    now = service._now()
+    monkeypatch.setattr(service, "_now", lambda: now)
+
+    async def provider(*_args, **_kwargs):
+        nonlocal now
+        for index in range(7):
+            now += timedelta(minutes=1)
+            yield f"part-{index}"
+
+    outcome, stream = await _lease_test_stream(provider)
+    try:
+        assert (await anext(stream))["event"] == "turn_started"
+        for _ in range(6):
+            assert (await anext(stream))["event"] == "turn_token_delta"
+        with pytest.raises(HTTPException) as exc_info:
+            service.append_user_turn_and_reserve_assistant(
+                thread_id=outcome.thread.id, owner_user_id=None, user_content="competing turn",
+            )
+        assert exc_info.value.detail["code"] == "THREAD_BUSY"
+        with Session(get_engine()) as session:
+            turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+            assert turn.status == "streaming"
+            assert turn.updated_at.replace(tzinfo=timezone.utc) == now
+        assert [event["event"] async for event in stream] == [
+            "turn_token_delta", "turn_completed",
+        ]
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("local_signal", [True, False])
+async def test_stale_reap_cancels_old_stream_once_and_preserves_emitted_prefix(
+    monkeypatch, local_signal,
+):
+    async def provider(*_args, **_kwargs):
+        yield "visible-prefix"
+        yield "revoked-late-token"
+
+    outcome, stream = await _lease_test_stream(provider)
+    try:
+        assert (await anext(stream))["event"] == "turn_started"
+        assert (await anext(stream))["data"]["delta"] == "visible-prefix"
+        with Session(get_engine()) as session:
+            turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+            turn.updated_at = service._now() - timedelta(minutes=6)
+            session.add(turn)
+            session.commit()
+        if not local_signal:
+            monkeypatch.setattr(
+                service, "_signal_turn_cancel_event", lambda *_args, **_kwargs: False,
+            )
+        _, _, next_turn = service.append_user_turn_and_reserve_assistant(
+            thread_id=outcome.thread.id, owner_user_id=None, user_content="replacement",
+        )
+        if local_signal:
+            assert service._get_turn_cancel_reason(outcome.assistant_turn.id) == "turn_revoked"
+        events = [event async for event in stream]
+        assert [event["event"] for event in events] == ["turn_aborted"]
+        assert events[0]["data"]["code"] == "STALE_TURN_REAPED"
+        with Session(get_engine()) as session:
+            old = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+            thread = session.get(AgentConversationThread, outcome.thread.id)
+            assert old.status == "aborted" and old.content == "visible-prefix"
+            assert old.completed_at is not None
+            assert thread.active_turn_id == next_turn.id and thread.latest_status == "pending"
+    finally:
+        await stream.aclose()
+
+
+async def test_stalled_stream_heartbeats_and_detects_remote_abort(monkeypatch):
+    monkeypatch.setattr(service, "_TURN_HEARTBEAT_SECONDS", 0.01)
+    now = service._now()
+    monkeypatch.setattr(service, "_now", lambda: now)
+    entered = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def provider(*_args, **_kwargs):
+        yield "partial"
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    outcome, stream = await _lease_test_stream(provider)
+    pending = None
+    try:
+        await anext(stream)
+        await anext(stream)
+        pending = asyncio.create_task(anext(stream))
+        await asyncio.wait_for(entered.wait(), timeout=0.5)
+        now += timedelta(minutes=6)
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            with Session(get_engine()) as session:
+                turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+                if turn.updated_at.replace(tzinfo=timezone.utc) == now:
+                    assert turn.content == "partial"
+                    break
+        else:
+            pytest.fail("live stalled stream did not renew its durable lease")
+        with pytest.raises(HTTPException) as busy:
+            service.append_user_turn_and_reserve_assistant(
+                thread_id=outcome.thread.id, owner_user_id=None, user_content="competing",
+            )
+        assert busy.value.detail["code"] == "THREAD_BUSY"
+        with Session(get_engine()) as session:
+            assert service.finalize_turn_cas(
+                session, turn_id=outcome.assistant_turn.id, new_status="aborted",
+                error_code="USER_ABORTED",
+            )
+        terminal = await asyncio.wait_for(pending, timeout=0.5)
+        assert terminal["event"] == "turn_aborted"
+        assert cleaned_up.is_set()
+        assert [event async for event in stream] == []
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await stream.aclose()
+
+
+async def test_foreign_owner_cannot_cancel_registered_stream():
+    async def provider(*_args, **_kwargs):
+        yield "safe"
+
+    outcome, stream = await _lease_test_stream(provider)
+    try:
+        await anext(stream)
+        with pytest.raises(HTTPException) as exc_info:
+            abort_turn(
+                thread_id=outcome.thread.id, turn_id=outcome.assistant_turn.id,
+                owner_user_id="foreign-owner",
+            )
+        assert exc_info.value.status_code == 404
+        assert service._get_turn_cancel_reason(outcome.assistant_turn.id) is None
+        assert [event["event"] async for event in stream] == ["turn_token_delta", "turn_completed"]
+    finally:
+        await stream.aclose()
+
+
+async def test_historical_anchor_conflict_errors_before_provider(coherent_origin):
+    outcome = _start_at_origin(coherent_origin)
+    with Session(get_engine()) as session:
+        thread = session.get(AgentConversationThread, outcome.thread.id)
+        thread.origin_round_number = 999
+        session.add(thread)
+        session.commit()
+
+    async def provider(*_args, **_kwargs):
+        pytest.fail("Invalid historical coordinates must never reach the provider")
+        yield ""
+
+    stream = await stream_assistant_turn(
+        thread_id=outcome.thread.id, assistant_turn_id=outcome.assistant_turn.id,
+        new_user_content="Explain the event", owner_user_id="origin-owner",
+        overrides=service.LLMOverrides(None, None, "test-model", False),
+        _llm_stream_factory=provider,
+    )
+    events = [event async for event in stream]
+    assert [event["event"] for event in events] == ["turn_error"]
+    assert events[0]["data"]["code"] == "INVALID_CONVERSATION_ORIGIN"
+    with Session(get_engine()) as session:
+        turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+        thread = session.get(AgentConversationThread, outcome.thread.id)
+        assert turn.status == "error"
+        assert thread.active_turn_id is None
+
+
+async def test_abort_winning_final_cas_still_emits_one_terminal(monkeypatch):
+    async def provider(*_args, **_kwargs):
+        yield "visible"
+
+    original_finalize = service.finalize_turn_cas
+
+    def abort_before_done(session, **kwargs):
+        if kwargs["new_status"] == "done":
+            assert original_finalize(
+                session, turn_id=kwargs["turn_id"], new_status="aborted",
+                error_code="USER_ABORTED",
+            )
+        return original_finalize(session, **kwargs)
+
+    monkeypatch.setattr(service, "finalize_turn_cas", abort_before_done)
+    outcome, stream = await _lease_test_stream(provider)
+    events = [event async for event in stream]
+    assert [event["event"] for event in events] == [
+        "turn_started", "turn_token_delta", "turn_aborted",
+    ]
+    with Session(get_engine()) as session:
+        turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+        assert turn.status == "aborted" and turn.content == "visible"
+
+
+@pytest.mark.parametrize("explicit_effort", [None, "high"])
+async def test_conversation_scope_honors_scenario_and_explicit_effort(
+    monkeypatch, explicit_effort,
+):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Effort propagation", status=ScenarioStatus.DONE,
+            parsed_context={"reasoning_effort": "low"},
+        )
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+    outcome = create_thread_with_first_turn(
+        scenario_id=scenario_id, owner_user_id=None, agent_identity_id=None,
+        origin_branch_id=None, origin_round_number=None, origin_node_id=None, origin_node_type=None,
+        first_user_content="hello",
+    )
+    captured = []
+    from app.services.llm_client import resolve_reasoning_effort
+
+    async def empty_stream(*_args, **_kwargs):
+        captured.append(resolve_reasoning_effort())
+        if False:
+            yield ""
+
+    async def fallback(*_args, **_kwargs):
+        captured.append(resolve_reasoning_effort())
+        return "complete fallback"
+
+    monkeypatch.setattr(service, "llm_call", fallback)
+    stream = await stream_assistant_turn(
+        thread_id=outcome.thread.id, assistant_turn_id=outcome.assistant_turn.id,
+        new_user_content="hello", owner_user_id=None,
+        overrides=service.LLMOverrides(
+            None, None, "test-model", False, reasoning_effort=explicit_effort,
+        ),
+        _llm_stream_factory=empty_stream,
+    )
+    events = [event async for event in stream]
+    assert events[-1]["event"] == "turn_completed"
+    assert captured == [explicit_effort or "low"] * 2
+
+
+async def test_abort_after_fallback_delta_wins_common_finalization(monkeypatch):
+    async def empty_provider(*_args, **_kwargs):
+        if False:
+            yield ""
+
+    async def fallback(*_args, **_kwargs):
+        return "visible fallback prefix"
+
+    monkeypatch.setattr(service, "llm_call", fallback)
+    outcome, stream = await _lease_test_stream(empty_provider)
+    try:
+        assert (await anext(stream))["event"] == "turn_started"
+        delta = await anext(stream)
+        assert delta["event"] == "turn_token_delta"
+        assert delta["data"]["delta"] == "visible fallback prefix"
+        assert abort_turn(
+            thread_id=outcome.thread.id, turn_id=outcome.assistant_turn.id,
+            owner_user_id=None,
+        ) is True
+        remaining = [event async for event in stream]
+        assert [event["event"] for event in remaining] == ["turn_aborted"]
+        assert remaining[0]["data"]["code"] == "USER_ABORTED"
+        with Session(get_engine()) as session:
+            turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+            thread = session.get(AgentConversationThread, outcome.thread.id)
+            assert turn.status == "aborted"
+            assert turn.content == "visible fallback prefix"
+            assert thread.active_turn_id is None and thread.latest_status == "aborted"
+    finally:
+        await stream.aclose()

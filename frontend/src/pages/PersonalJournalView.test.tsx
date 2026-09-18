@@ -179,7 +179,7 @@ describe('PersonalJournalView', () => {
     apiMocks.getJournalCalibration
       .mockImplementationOnce(() => staleCalibration.promise)
       .mockImplementationOnce(() => freshCalibration.promise);
-    apiMocks.createJournalEntry.mockResolvedValueOnce({});
+    apiMocks.createJournalEntry.mockResolvedValueOnce(makeEntry(2, 'Fresh forecast'));
 
     renderView();
 
@@ -434,4 +434,80 @@ describe('PersonalJournalView side panels — fail-soft', () => {
     expect(apiMocks.getScenario).toHaveBeenCalledTimes(2);
     debugSpy.mockRestore();
   });
+});
+
+it('releases the save action after commit while journal refresh is still pending', async () => {
+  const pendingList = createDeferred<JournalListResponse>();
+  const pendingCalibration = createDeferred<CalibrationResponse>();
+  const savedEntry = makeEntry(42, 'Will the committed forecast remain visible?');
+  apiMocks.listJournalEntries
+    .mockResolvedValueOnce({ items: [] })
+    .mockReturnValueOnce(pendingList.promise);
+  apiMocks.getJournalCalibration
+    .mockResolvedValueOnce({ bins: [] })
+    .mockReturnValueOnce(pendingCalibration.promise);
+  apiMocks.createJournalEntry.mockResolvedValueOnce(savedEntry);
+
+  renderView();
+  await screen.findByText('No forecasts yet. Log your first prediction above.');
+  fireEvent.change(screen.getByLabelText('Question'), { target: { value: savedEntry.question } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log forecast' }));
+  await waitFor(() => expect(apiMocks.listJournalEntries).toHaveBeenCalledTimes(2));
+
+  expect(screen.getByRole('button', { name: 'Log forecast' })).toBeEnabled();
+  expect(screen.getByText(savedEntry.question)).toBeInTheDocument();
+  expect(screen.getByLabelText('Question')).toHaveValue('');
+  expect(screen.getByText('Refreshing…')).toBeInTheDocument();
+
+  await act(async () => {
+    pendingList.resolve({ items: [savedEntry], limit: 50, offset: 0 });
+    pendingCalibration.resolve({ bins: [] });
+  });
+  expect(screen.getAllByText(savedEntry.question)).toHaveLength(1);
+  expect(screen.queryByText('Refreshing…')).not.toBeInTheDocument();
+});
+
+it('keeps a failed POST separate from a failed post-commit refresh', async () => {
+  const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+  apiMocks.createJournalEntry.mockRejectedValueOnce(new Error('write failed'));
+  renderView();
+  await screen.findByText('No forecasts yet. Log your first prediction above.');
+  fireEvent.change(screen.getByLabelText('Question'), { target: { value: 'Preserve this draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log forecast' }));
+  expect(await screen.findByText('Could not log forecast. Please retry.')).toBeInTheDocument();
+  expect(screen.getByLabelText('Question')).toHaveValue('Preserve this draft');
+  expect(apiMocks.listJournalEntries).toHaveBeenCalledTimes(1);
+
+  apiMocks.createJournalEntry.mockResolvedValueOnce(makeEntry(43, 'Preserve this draft'));
+  apiMocks.getJournalCalibration.mockRejectedValueOnce(new Error('refresh failed'));
+  fireEvent.click(screen.getByRole('button', { name: 'Log forecast' }));
+  expect(await screen.findByText('Could not load forecasts. Please retry.')).toBeInTheDocument();
+  expect(screen.queryByText('Could not log forecast. Please retry.')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Question')).toHaveValue('');
+  expect(screen.getByRole('button', { name: 'Log forecast' })).toBeEnabled();
+  debugSpy.mockRestore();
+});
+
+it('does not let an earlier refresh release a newer pending save', async () => {
+  const firstRefresh = createDeferred<JournalListResponse>();
+  const secondSave = createDeferred<JournalEntry>();
+  const first = makeEntry(44, 'First committed forecast');
+  const second = makeEntry(45, 'Second forecast still saving');
+  apiMocks.createJournalEntry.mockResolvedValueOnce(first).mockReturnValueOnce(secondSave.promise);
+  apiMocks.listJournalEntries.mockResolvedValueOnce({ items: [] })
+    .mockReturnValueOnce(firstRefresh.promise)
+    .mockResolvedValueOnce({ items: [second, first] });
+  renderView();
+  await screen.findByText('No forecasts yet. Log your first prediction above.');
+  fireEvent.change(screen.getByLabelText('Question'), { target: { value: first.question } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log forecast' }));
+  await screen.findByText(first.question);
+  fireEvent.change(screen.getByLabelText('Question'), { target: { value: second.question } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log forecast' }));
+  expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+  await act(async () => { firstRefresh.resolve({ items: [first], limit: 50, offset: 0 }); });
+  expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+  await act(async () => { secondSave.resolve(second); });
+  expect(await screen.findByText(second.question)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Log forecast' })).toBeEnabled();
 });

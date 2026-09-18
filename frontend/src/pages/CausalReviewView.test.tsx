@@ -270,6 +270,20 @@ const {
 const graphAnalysisApiMock = vi.hoisted(() => ({
   buildSessionHeaders: vi.fn(() => new Headers()),
   getGraphAnalysis: vi.fn(),
+  getScenario: vi.fn(async (scenarioId: string) => ({
+    id: scenarioId,
+    conversation_llm_configured: true,
+  })),
+  getConversation: vi.fn(async (threadId: string) => ({
+    thread_id: threadId,
+    scenario_id: 'test-id',
+    owner_user_id: 'fixture-owner',
+    last_turn_sequence: 0,
+    latest_status: 'committed',
+    created_at: '2026-09-18T00:00:00Z',
+    updated_at: '2026-09-18T00:00:00Z',
+    turns: [],
+  })),
 }));
 
 vi.mock('../hooks/useCapabilityCheck', () => ({
@@ -282,9 +296,12 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
   }),
 }));
 
-vi.mock('../api/client', () => ({
+vi.mock('../api/client', async importOriginal => ({
+  ...await importOriginal<typeof import('../api/client')>(),
   buildSessionHeaders: graphAnalysisApiMock.buildSessionHeaders,
   getGraphAnalysis: graphAnalysisApiMock.getGraphAnalysis,
+  getScenario: graphAnalysisApiMock.getScenario,
+  getConversation: graphAnalysisApiMock.getConversation,
 }));
 
 vi.mock('../components/workbench/ActionLedgerPanel', () => ({
@@ -408,6 +425,8 @@ afterEach(() => {
   fitViewMock.mockReset();
   graphAnalysisApiMock.getGraphAnalysis.mockReset();
   graphAnalysisApiMock.buildSessionHeaders.mockClear();
+  graphAnalysisApiMock.getScenario.mockClear();
+  graphAnalysisApiMock.getConversation.mockClear();
   resetMockCapabilities();
   resetTestI18n();
   document.body.classList.remove('has-causal-graph');

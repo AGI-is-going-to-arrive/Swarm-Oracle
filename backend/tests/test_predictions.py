@@ -18,6 +18,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.main import app
 from app.models import Branch, Scenario, ScenarioStatus
 from app.models.predictions import Leaderboard, Prediction
+from app.services.llm_client import resolve_reasoning_effort
 from app.services.scoring import _update_leaderboard, recompute_leaderboard_entry
 
 
@@ -1290,9 +1291,12 @@ def test_score_predictions_endpoint_returns_attempt_and_failure_stats(tmp_path):
     }
 
 
-def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
+@pytest.mark.parametrize("scenario_effort", [None, "high"])
+def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch, scenario_effort):
     from app.config import settings
     from app.services import scoring as scoring_module
+
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
 
     monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
     monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
@@ -1310,6 +1314,7 @@ def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
     scenario_id = _seed_done_scenario_with_prediction(
         parsed_context={
             "_language": "English",
+            "reasoning_effort": scenario_effort,
             "model_profile_id": profile_id,
             "llm_concurrency": 1,
             "supports_structured_outputs": True,
@@ -1327,6 +1332,7 @@ def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
 
     async def fake_llm(_prompt: str, **kwargs):
         captured["llm"] = dict(kwargs)
+        captured["effective_effort"] = resolve_reasoning_effort()
         return {"score": 93, "reason": "profile scored it"}
 
     monkeypatch.setattr(scoring_module, "llm_request_scope", spy_scope)
@@ -1345,8 +1351,11 @@ def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
     assert captured["llm"]["api_key"] == "sk-score-profile"
     assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
     assert captured["llm"]["model"] == "score-profile-model"
+    assert captured["llm"]["reasoning_effort"] == (scenario_effort or "low")
+    assert captured["effective_effort"] == (scenario_effort or "low")
     assert captured["scope"] == {
         "quota_key": "user:score-owner",
+        "reasoning_effort": scenario_effort or "low",
         "purpose": "prediction_scoring",
         "requests_per_minute": 31,
         "tokens_per_minute": 3100,

@@ -16,7 +16,9 @@ import logging
 import threading
 import time
 import zipfile
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import event
@@ -4673,14 +4675,20 @@ class TestRunSimulation:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("confirmed_create", [False, True])
+    @pytest.mark.parametrize(
+        ("saved_effort", "requested_effort", "expected_effort"),
+        [(None, None, "low"), ("high", None, "high"), ("high", "low", "low"),
+         ("low", "high", "high"), ("none", None, "none")],
+    )
     async def test_replay_runtime_rehydrates_owned_model_profile_provider(
         self,
         monkeypatch,
-        confirmed_create,
+        confirmed_create, saved_effort, requested_effort, expected_effort,
     ):
         from app.services.model_profiles import resolve_model_profile_policy
 
         monkeypatch.setattr(simulator_module.settings, "FEATURE_MODEL_PROFILES", True)
+        monkeypatch.setattr(simulator_module.settings, "LLM_REASONING_EFFORT", "low")
         engine = get_engine()
         scenario_id = _make_scenario(engine)
         profile_id = ""
@@ -4716,6 +4724,7 @@ class TestRunSimulation:
                 "key_variable": scenario.question,
                 "mode": "raw",
                 "model_profile_id": profile_id,
+                "reasoning_effort": saved_effort,
                 "llm_requests_per_minute": 3,
                 "llm_tokens_per_minute": 300,
                 "llm_concurrency": 3,
@@ -4759,6 +4768,8 @@ class TestRunSimulation:
             captured["api_key"] = kwargs.get("api_key")
             captured["base_url"] = kwargs.get("base_url")
             captured["model"] = kwargs.get("model")
+            captured["reasoning_effort"] = kwargs.get("reasoning_effort")
+            captured["effective_effort"] = simulator_module.resolve_reasoning_effort("medium")
             return "The replay continues with the selected profile."
 
         async def _fake_llm_call_json(*_args, **_kwargs):
@@ -4790,15 +4801,22 @@ class TestRunSimulation:
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
-        await run_simulation(scenario_id, confirmed_profile_policy=confirmed_policy)
+        await run_simulation(
+            scenario_id,
+            confirmed_profile_policy=confirmed_policy,
+            llm_overrides={"reasoning_effort": requested_effort},
+        )
 
         assert {key: captured[key] for key in ("api_key", "base_url", "model")} == {
             "api_key": "sk-replay-profile-secret",
             "base_url": "https://api.openai.com/v1",
             "model": "fresh-profile-model",
         }
+        assert captured["reasoning_effort"] == expected_effort
+        assert captured["effective_effort"] == expected_effort
         assert captured["scope"] == {
             "purpose": "scenario_turn_generation",
+            "reasoning_effort": expected_effort,
             "requests_per_minute": 17,
             "tokens_per_minute": 1700,
             "concurrency": 7,
@@ -9760,7 +9778,8 @@ class TestCompressRoundMemory:
 
 class TestNarrateBranchData:
     @pytest.mark.asyncio
-    async def test_passes_llm_overrides_into_narration(self, monkeypatch):
+    @pytest.mark.parametrize("effort", [None, "low", "high", "none"])
+    async def test_passes_llm_overrides_into_narration(self, monkeypatch, effort):
         engine = get_engine()
         sid = _make_scenario(engine)
         bid = _create_branch(engine, sid, title="主线", probability=0.7)
@@ -9781,6 +9800,7 @@ class TestNarrateBranchData:
             base_url=None,
             temperature=None,
             model=None,
+            reasoning_effort=None,
             web_context_block="",
             question="",
         ):
@@ -9788,6 +9808,7 @@ class TestNarrateBranchData:
             captured["base_url"] = base_url
             captured["temperature"] = temperature
             captured["model"] = model
+            captured["reasoning_effort"] = reasoning_effort
             return {"story": "story", "insight": "insight", "key_moments": []}
 
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
@@ -9802,6 +9823,7 @@ class TestNarrateBranchData:
                 "base_url": "https://example.com/v1/chat/completions",
                 "temperature": 0.8,
                 "model": "gpt-test",
+                "reasoning_effort": effort,
             },
         )
 
@@ -9811,6 +9833,7 @@ class TestNarrateBranchData:
             "base_url": "https://example.com/v1/chat/completions",
             "temperature": 0.8,
             "model": "gpt-test",
+            "reasoning_effort": effort,
         }
 
     @pytest.mark.asyncio
@@ -15550,3 +15573,60 @@ def test_memory_promotion_trigger_source_order_is_frozen():
     promotion = source.index("await attempt_verified_memory_promotion_v1", lease_reconfirm)
     broadcast = source.index('"type": "world_state_committed"', promotion)
     assert finalizer < second_cancel < lease_reconfirm < promotion < broadcast
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [AgentTier.CORE, AgentTier.CROWD])
+@pytest.mark.parametrize("selected", [None, "low", "high", "none"])
+async def test_agent_tiers_and_fork_use_effective_wire_effort(monkeypatch, tier, selected):
+    from app.services import llm_client
+
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Review")
+    round_id = _create_round(engine, branch_id, 1)
+    agent_id = _make_agent(engine, scenario_id, name="Reviewer", tier=tier)
+    agent = _load_agent_dict(engine, agent_id)
+    payloads = []
+    phase = "turn"
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        if phase == "fork":
+            result = json.dumps({
+                "should_fork": False, "reason": "Review continues", "branches": [],
+            })
+        elif len(payloads) == 1:
+            result = json.dumps({
+                **_decision_envelope_fixture(), "emotion": "calm", "diverge": None,
+            })
+        else:
+            result = "The council will keep its appeal rules open for review."
+        return httpx.Response(200, json={"choices": [{"message": {"content": result}}]})
+
+    monkeypatch.setattr(llm_client.settings, "LLM_REASONING_EFFORT", "low")
+    monkeypatch.setattr(llm_client, "probe_streaming_support", AsyncMock(
+        return_value={"supported": False},
+    ))
+    monkeypatch.setattr(simulator_module, "retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr(simulator_module, "store_memory", lambda *a, **k: None)
+    overrides = {
+        "base_url": "http://127.0.0.1:8317/v1/chat/completions",
+        "model": "simulation-model", "reasoning_effort": selected,
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: client)
+        messages = await _gather_agent_messages(
+            engine, scenario_id, branch_id, round_id, 1, [agent], "", "How should appeals work?",
+            language="English", llm_overrides=overrides,
+        )
+        phase = "fork"
+        fork = await _detect_fork(
+            engine, branch_id, ["Whether appeal rules should change"], 0.7,
+            language="English", llm_overrides=overrides,
+        )
+    assert messages[0]["content"] == "The council will keep its appeal rules open for review."
+    assert fork["should_fork"] is False
+    assert len(payloads) == 3
+    expected = None if selected == "none" else selected or "low"
+    assert all(payload.get("reasoning_effort") == expected for payload in payloads)

@@ -32,8 +32,10 @@ const {
       'compare.title': 'Compare branches',
       'compare.missing_params': 'Missing branch parameters',
       'compare.divergence_label': 'Divergence',
-      'compare.branch_a_label': 'Branch A (Original)',
-      'compare.branch_b_label': 'Branch B (Counterfactual)',
+      'compare.branch_a_label': 'Branch A',
+      'compare.branch_b_label': 'Branch B',
+      'compare.branch_original_name': '{{branch}} (Original)',
+      'compare.branch_counterfactual_name': '{{branch}} (Counterfactual)',
       'compare.no_data': 'No comparison data available.',
       'compare.error_fetch': 'Unable to load comparison data right now. Please retry.',
       'compare.feature_disabled': 'Counterfactual replay feature is not enabled.',
@@ -244,6 +246,54 @@ describe('CompareDigestView', () => {
       rounds: [{ round: 1, branch_a_summary: 'First saved summary', branch_b_summary: 'Second saved summary', branch_a_messages: [], branch_b_messages: [], divergence_score: 0.5, is_identical: false }],
     });
   }
+
+  it.each([
+    { name: 'ordinary branches', reverse: false, aSource: null, bSource: null, aKind: null, bKind: null, proven: false },
+    { name: 'reversed ordinary branches', reverse: true, aSource: null, bSource: null, aKind: null, bKind: null, proven: false },
+    { name: 'linked counterfactual', reverse: false, aSource: null, bSource: 'a', aKind: null, bKind: 'counterfactual', proven: true },
+    { name: 'reversed linked counterfactual', reverse: true, aSource: null, bSource: 'a', aKind: null, bKind: 'counterfactual', proven: true },
+    { name: 'counterfactual without a source', reverse: false, aSource: null, bSource: null, aKind: null, bKind: 'counterfactual', proven: false },
+    { name: 'counterfactual of another branch', reverse: false, aSource: null, bSource: 'elsewhere', aKind: null, bKind: 'counterfactual', proven: false },
+    { name: 'retrospective replay', reverse: false, aSource: null, bSource: 'a', aKind: null, bKind: 'retrospective', proven: false },
+    { name: 'untyped replay', reverse: false, aSource: null, bSource: 'a', aKind: null, bKind: null, proven: false },
+    { name: 'reciprocal replay links', reverse: false, aSource: 'b', bSource: 'a', aKind: 'counterfactual', bKind: 'counterfactual', proven: false },
+    { name: 'mixed reciprocal replay links', reverse: false, aSource: 'b', bSource: 'a', aKind: 'retrospective', bKind: 'counterfactual', proven: false },
+  ])('uses truthful branch names for $name', async ({ reverse, aSource, bSource, aKind, bKind, proven }) => {
+    const firstId = reverse ? 'b' : 'a';
+    const secondId = reverse ? 'a' : 'b';
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id', question: 'Compare these saved branches', status: 'done', agents: [], messages: [],
+      branches: [
+        { id: 'a', title: 'North route', story: 'Saved first', status: 'COMPLETED', replay_source_branch_id: aSource, replay_kind: aKind },
+        { id: 'b', title: 'South route', story: 'Saved second', status: 'COMPLETED', replay_source_branch_id: bSource, replay_kind: bKind },
+      ],
+    });
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id', branch_a: firstId, branch_b: secondId, common_rounds: 0, intervention: null,
+      rounds: [{ round: 1, branch_a_summary: 'First summary', branch_b_summary: 'Second summary', branch_a_messages: [], branch_b_messages: [], divergence_score: 0.5, is_identical: false }],
+    });
+    const view = renderView(`/result/test-id/compare?branch_a=${firstId}&branch_b=${secondId}`);
+    await screen.findByText('Compare these saved branches');
+    const names = proven ? ['North route (Original)', 'South route (Counterfactual)']
+      : ['North route', 'South route'];
+    if (reverse) names.reverse();
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(names);
+    expect(Array.from(view.container.querySelectorAll('.compare-round-card__grid > section > span'),
+      (heading) => heading.textContent)).toEqual(names);
+    expect(screen.queryByText('Branch A (Original)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Branch B (Counterfactual)')).not.toBeInTheDocument();
+  });
+
+  it('uses neutral fallback names when the selected branches have no saved titles', async () => {
+    mockGuideComparison();
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id', question: 'Missing branch names', status: 'done', agents: [], messages: [],
+      branches: [{ id: 'a', title: '   ' }, { id: 'b' }],
+    });
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+    await screen.findByText('Missing branch names');
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Branch A', 'Branch B']);
+  });
 
   it('returns the guide to evidence only after a real saved comparison has loaded', async () => {
     mockGuideComparison();

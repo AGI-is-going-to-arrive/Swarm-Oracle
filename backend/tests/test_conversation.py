@@ -956,7 +956,7 @@ class TestSSEStream:
 
 class TestAbort:
     @pytest.mark.asyncio
-    async def test_preclaimed_turn_aborted_before_first_iteration_emits_no_sse(self, client):
+    async def test_preclaimed_abort_before_first_iteration_emits_terminal_abort(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine)
         start = client.post(
@@ -996,6 +996,7 @@ class TestAbort:
         assert abort_resp.status_code == 200
         assert abort_resp.json()["aborted"] is True
 
+        assert (await anext(iterator))["event"] == "turn_aborted"
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
 
@@ -1010,7 +1011,7 @@ class TestAbort:
             assert refreshed_thread.latest_status == "aborted"
 
     @pytest.mark.asyncio
-    async def test_preclaimed_turn_with_pre_set_cancel_event_emits_no_sse(self, client):
+    async def test_preclaimed_turn_with_pre_set_cancel_event_emits_terminal_abort(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine)
         start = client.post(
@@ -1049,6 +1050,7 @@ class TestAbort:
             _llm_stream_factory=_stub_stream,
         )
 
+        assert (await anext(iterator))["event"] == "turn_aborted"
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
 
@@ -1122,6 +1124,7 @@ class TestAbort:
             _llm_stream_factory=_stub_stream,
         )
 
+        assert (await anext(iterator))["event"] == "turn_aborted"
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
 
@@ -1284,8 +1287,10 @@ class TestAbort:
 
         cancel_event.set()
         started_at = time.perf_counter()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(anext(iterator), timeout=0.1)
+        terminal = await asyncio.wait_for(anext(iterator), timeout=0.1)
+        assert terminal["event"] == "turn_aborted"
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
         assert time.perf_counter() - started_at < 0.1
 
         with Session(engine) as session:
@@ -1341,8 +1346,10 @@ class TestAbort:
         assert resp.json()["aborted"] is True
         assert elapsed < 0.1
 
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(anext(iterator), timeout=0.2)
+        terminal = await asyncio.wait_for(anext(iterator), timeout=0.2)
+        assert terminal["event"] == "turn_aborted"
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
 
         with Session(engine) as session:
             row = session.get(AgentConversationTurn, assistant_turn_id)
@@ -1383,12 +1390,8 @@ class TestAbort:
             _llm_stream_factory=_cancelled_stream,
         )
 
-        seen_events: list[str] = []
-        with pytest.raises(asyncio.CancelledError):
-            async for event in iterator:
-                seen_events.append(event["event"])
-
-        assert seen_events[:2] == ["turn_started", "turn_token_delta"]
+        seen_events = [event["event"] async for event in iterator]
+        assert seen_events == ["turn_started", "turn_token_delta", "turn_aborted"]
         with Session(engine) as session:
             row = session.get(AgentConversationTurn, assistant_turn_id)
             thread = session.get(AgentConversationThread, thread_id)
@@ -1877,3 +1880,18 @@ class TestModelFieldHygiene:
                     content="ok",
                     model="https://api.openai.com/v1",
                 )
+
+
+@pytest.mark.asyncio
+async def test_sse_terminal_prevents_late_delta_and_second_terminal():
+    async def source():
+        yield {"event": "turn_aborted", "data": {"turn_id": "turn-1"}}
+        yield {"event": "turn_token_delta", "data": {"delta": "must be discarded"}}
+        raise RuntimeError("late producer error")
+
+    frames = [frame async for frame in conversation_module._sse_event_stream(
+        source(), request_id="terminal-regression",
+    )]
+    assert len(frames) == 1
+    assert frames[0].startswith("event: turn_aborted\n")
+    assert "must be discarded" not in frames[0]

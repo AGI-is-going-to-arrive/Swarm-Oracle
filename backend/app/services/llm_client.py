@@ -815,6 +815,7 @@ class LLMRequestContext:
 
     quota_key: str | None = None
     purpose: str | None = None
+    reasoning_effort: str | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
     concurrency: int | None = None
@@ -882,6 +883,7 @@ def llm_request_scope(
     *,
     quota_key: str | None | object = _REQUEST_SCOPE_UNSET,
     purpose: str | None | object = _REQUEST_SCOPE_UNSET,
+    reasoning_effort: str | None | object = _REQUEST_SCOPE_UNSET,
     requests_per_minute: int | None | object = _REQUEST_SCOPE_UNSET,
     tokens_per_minute: int | None | object = _REQUEST_SCOPE_UNSET,
     concurrency: int | None | object = _REQUEST_SCOPE_UNSET,
@@ -889,7 +891,11 @@ def llm_request_scope(
     supports_native_search_override: bool | None | object = _REQUEST_SCOPE_UNSET,
     native_search_upstream_override: str | None | object = _REQUEST_SCOPE_UNSET,
 ):
-    """Attach request-scoped quota metadata to downstream LLM calls."""
+    """Bind run policy and quota metadata to downstream LLM calls.
+
+    An explicit run effort is authoritative over individual call defaults.
+    Omission inherits the enclosing scope; ``None`` clears the scoped policy.
+    """
     current = _REQUEST_CONTEXT.get()
     scoped_concurrency = _resolve_scoped_concurrency(current, concurrency)
     previous = current
@@ -897,6 +903,11 @@ def llm_request_scope(
         LLMRequestContext(
             quota_key=current.quota_key if quota_key is _REQUEST_SCOPE_UNSET else quota_key,
             purpose=current.purpose if purpose is _REQUEST_SCOPE_UNSET else purpose,
+            reasoning_effort=(
+                current.reasoning_effort
+                if reasoning_effort is _REQUEST_SCOPE_UNSET
+                else _normalize_reasoning_effort(reasoning_effort)
+            ),
             requests_per_minute=(
                 current.requests_per_minute
                 if requests_per_minute is _REQUEST_SCOPE_UNSET
@@ -1245,8 +1256,25 @@ def _estimate_tokens(text: str) -> int:
 
 def _normalize_reasoning_effort(value: str | None) -> str | None:
     normalized = (value or "").strip().lower()
-    if normalized in {"low", "medium", "high"}:
+    if normalized in {"none", "low", "medium", "high"}:
         return normalized
+    return None
+
+
+def resolve_reasoning_effort(reasoning_effort: str | None = None) -> str | None:
+    """Resolve the bound run policy, explicit call selection, then server default.
+
+    Keep ``none`` distinct from an absent selection so disabling reasoning does
+    not accidentally inherit another phase's default.
+    """
+    for value in (
+        _REQUEST_CONTEXT.get().reasoning_effort,
+        reasoning_effort,
+        settings.LLM_REASONING_EFFORT,
+    ):
+        normalized = _normalize_reasoning_effort(value)
+        if normalized is not None:
+            return normalized
     return None
 
 
@@ -1262,15 +1290,15 @@ def _build_llm_payload(
     payload: dict[str, Any] = {
         "model": model or settings.LLM_MODEL_NAME,
     }
-    effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
+    effort = resolve_reasoning_effort(reasoning_effort)
 
     if is_chat:
         payload["messages"] = [{"role": "user", "content": input_text}]
-        if effort:
+        if effort and effort != "none":
             payload["reasoning_effort"] = effort
     else:
         payload["input"] = input_text
-        if effort:
+        if effort and effort != "none":
             payload["reasoning"] = {"effort": effort}
 
     return payload, is_chat
@@ -2777,7 +2805,7 @@ async def _llm_call_impl(
 
     Args:
         input_text: The prompt / instruction to send.
-        reasoning_effort: Override reasoning effort (low/medium/high).
+        reasoning_effort: Call selection (none/low/medium/high), below bound run policy.
         temperature: Override sampling temperature for chat-completions providers.
         model: Override model name.
         timeout: Request timeout in seconds.
@@ -2817,7 +2845,7 @@ async def _llm_call_impl(
     is_chat = original_is_chat
     estimated_tokens = _estimate_tokens(input_text)
 
-    effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
+    effort = resolve_reasoning_effort(reasoning_effort)
 
     def _build_call_payload(*, chat_api: bool) -> dict[str, Any]:
         call_payload: dict[str, Any] = {
@@ -2825,7 +2853,7 @@ async def _llm_call_impl(
         }
         if chat_api:
             call_payload["messages"] = [{"role": "user", "content": input_text}]
-            if effort:
+            if effort and effort != "none":
                 call_payload["reasoning_effort"] = effort
             if temperature is not None:
                 call_payload["temperature"] = temperature
@@ -2833,7 +2861,7 @@ async def _llm_call_impl(
                 call_payload["max_tokens"] = int(max_tokens)
         else:
             call_payload["input"] = input_text
-            if effort:
+            if effort and effort != "none":
                 call_payload["reasoning"] = {"effort": effort}
         return call_payload
 
@@ -3528,14 +3556,14 @@ async def _llm_call_json_for_family_query_reformulation_impl(
     is_chat = _is_chat_completions_api(target_url)
     provider_key = _provider_key(target_url)
     estimated_tokens = _estimate_tokens(input_text)
-    effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
+    effort = resolve_reasoning_effort(reasoning_effort)
 
     payload: dict[str, Any] = {"model": selected_model}
     if is_chat:
         payload["messages"] = [{"role": "user", "content": input_text}]
         if temperature is not None:
             payload["temperature"] = temperature
-        if effort:
+        if effort and effort != "none":
             payload["reasoning_effort"] = effort
         if max_output_tokens is not None and max_output_tokens > 0:
             payload[_chat_output_token_param(selected_model, base_url or target_url)] = int(
@@ -3543,7 +3571,7 @@ async def _llm_call_json_for_family_query_reformulation_impl(
             )
     else:
         payload["input"] = input_text
-        if effort:
+        if effort and effort != "none":
             payload["reasoning"] = {"effort": effort}
         if max_output_tokens is not None and max_output_tokens > 0:
             payload["max_output_tokens"] = int(max_output_tokens)
@@ -4010,17 +4038,17 @@ async def _llm_call_stream_impl(
         "stream": True,
     }
 
-    effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
+    effort = resolve_reasoning_effort(reasoning_effort)
 
     if is_chat:
         payload["messages"] = [{"role": "user", "content": input_text}]
-        if effort:
+        if effort and effort != "none":
             payload["reasoning_effort"] = effort
         if temperature is not None:
             payload["temperature"] = temperature
     else:
         payload["input"] = input_text
-        if effort:
+        if effort and effort != "none":
             payload["reasoning"] = {"effort": effort}
         payload["stream"] = True
 
@@ -4482,15 +4510,16 @@ async def llm_call_json_with_stream_fallback(
             code="LLM_TIMEOUT",
         )
     try:
-        probe = await asyncio.wait_for(
-            probe_streaming_support(
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-                timeout=min(probe_timeout, remaining),
-            ),
-            timeout=remaining,
-        )
+        with llm_request_scope(reasoning_effort=resolve_reasoning_effort(reasoning_effort)):
+            probe = await asyncio.wait_for(
+                probe_streaming_support(
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    timeout=min(probe_timeout, remaining),
+                ),
+                timeout=remaining,
+            )
     except TimeoutError:
         probe = {
             "supported": False,

@@ -9,6 +9,11 @@ import { __resetCapabilityCacheForTests } from '../hooks/useCapabilityCheck';
 import { useAgentStore } from '../stores/agentStore';
 import { InputView } from './InputView';
 
+// Exercise the actual focus-scope teardown; the shared primitive mock does not
+// invoke onCloseAutoFocus and cannot prove focus restoration after a dialog exits.
+vi.unmock('@radix-ui/react-alert-dialog');
+vi.unmock('@radix-ui/react-dialog');
+
 const {
   createDebateMock,
   getCapabilitiesMock,
@@ -151,8 +156,8 @@ const {
     if (key === 'home.launch_scale_value') {
       return `${options?.agents} agents × ${options?.rounds} rounds × ${options?.runs} runs`;
     }
-    if (key === 'debate.entry_hint') {
-      return 'Debate Arena usually resolves in 3-5 minutes.';
+    if (key === 'debate.review_structure') {
+      return 'Two sides and one judge. Four speaking phases: opening, crossfire, rebuttal and closing, followed by a verdict.';
     }
     return translations[currentLanguage]?.[key] ?? key;
   };
@@ -392,6 +397,12 @@ async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
   }
 }
 
+async function confirmDebateDialog(user: ReturnType<typeof userEvent.setup>) {
+  const dialog = await screen.findByRole('dialog', { name: 'debate.review_title' });
+  await waitForDialogDescription(dialog);
+  await user.click(within(dialog).getByRole('button', { name: 'debate.review_start' }));
+}
+
 async function confirmLaunchDialog(user: ReturnType<typeof userEvent.setup>) {
   // Radix AlertDialog renders into document.body via Portal; query by role rather than container.
   const dialog = await screen.findByRole('dialog');
@@ -594,7 +605,7 @@ describe('InputView campaign progress', () => {
     getChallengeProgressMock.mockReturnValue(null);
   });
 
-  it('reuses the debate creation intent after an uncertain failure and changes it for a new question', async () => {
+  it('reuses the captured debate intent after an uncertain failure and changes it after editing', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue({ llm_configured: true, llm_static_configured: true });
     createDebateMock.mockRejectedValueOnce(new Error('Response lost'))
@@ -604,15 +615,151 @@ describe('InputView campaign progress', () => {
     const questionInput = screen.getByRole('textbox', { name: 'home.question_input_label' });
     fireEvent.change(questionInput, { target: { value: 'First debate question' } });
     await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'debate.entry_cta' })).toBeEnabled());
-    const firstId = createDebateMock.mock.calls[0][2].clientRequestId;
+    expect(createDebateMock).not.toHaveBeenCalled();
+    await confirmDebateDialog(user);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'debate.review_start' })).toBeEnabled());
+    expect(within(screen.getByRole('dialog')).getByText('debate.start_failed')).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).queryByText('common.api_errors.simulation_start_failed')).not.toBeInTheDocument();
+    const firstRequest = createDebateMock.mock.calls[0];
+    const firstId = firstRequest[2].clientRequestId;
     expect(typeof firstId).toBe('string');
-    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'debate.entry_cta' })).toBeEnabled());
-    expect(createDebateMock.mock.calls[1][2].clientRequestId).toBe(firstId);
+    // A background edit cannot change a retry of the already accepted intent.
     fireEvent.change(questionInput, { target: { value: 'A changed debate question' } });
+    await confirmDebateDialog(user);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'debate.review_start' })).toBeEnabled());
+    expect(createDebateMock.mock.calls[1]).toEqual(firstRequest);
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'common.cancel' }));
     await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    expect(within(screen.getByRole('dialog')).getByText('A changed debate question')).toBeInTheDocument();
+    await confirmDebateDialog(user);
     expect(createDebateMock.mock.calls[2][2].clientRequestId).not.toBe(firstId);
+    expect(createDebateMock.mock.calls[2][0]).toBe('A changed debate question');
+  });
+
+  it('reviews the fixed debate format separately from simulation sliders and cancels without a request', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    const questionInput = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(questionInput, { target: { value: 'Should the council adopt this proposal?' } });
+    for (const label of ['home.rounds_label', 'home.agents_label']) {
+      const slider = screen.getByRole('slider', { name: label });
+      expect(slider).toHaveAttribute('aria-describedby', 'simulation-controls-scope');
+      fireEvent.change(slider, { target: { value: '40' } });
+    }
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    const dialog = screen.getByRole('dialog', { name: 'debate.review_title' });
+    expect(within(dialog).getByText(/Two sides and one judge.*Four speaking phases/)).toBeInTheDocument();
+    expect(within(dialog).getByText('debate.review_extra_work')).toBeInTheDocument();
+    expect(within(dialog).getByText('debate.review_cost_unknown')).toBeInTheDocument();
+    expect(within(dialog).queryByText('home.launch_cost_unknown')).not.toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent('40 agents');
+    expect(dialog).not.toHaveTextContent('40 rounds');
+    expect(createDebateMock).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'common.cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(questionInput).toHaveValue('Should the council adopt this proposal?');
+    expect(createDebateMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['cancel', 'escape'] as const)('restores the debate trigger after Radix teardown via %s', async (method) => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    const questionInput = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(questionInput, { target: { value: 'Keep this debate draft' } });
+    const trigger = screen.getByRole('button', { name: 'debate.entry_cta' });
+    await user.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: 'debate.review_title' });
+    if (method === 'cancel') {
+      await user.click(within(dialog).getByRole('button', { name: 'common.cancel' }));
+    } else {
+      await user.keyboard('{Escape}');
+    }
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // Radix exit/unmount cleanup must not move restored focus back to BODY later.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1500)); });
+    expect(trigger).toHaveFocus();
+    expect(questionInput).toHaveValue('Keep this debate draft');
+    expect(createDebateMock).not.toHaveBeenCalled();
+  });
+
+  it('executes the reviewed provider, effort, question and debaters after hidden form drift', async () => {
+    const user = userEvent.setup();
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'reviewed-private-key', baseUrl: 'http://localhost:11434/v1', model: 'reviewed-model',
+    }));
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true, custom_agents: { enabled: true, max_custom_agents: 2 },
+    });
+    const identities = [['agent-1', 'Agent One'], ['agent-2', 'Agent Two']].map(([id, name]) => ({
+      id, display_name: name, user_id: 'default_user', kind: 'custom', role: 'Analyst',
+      persona: 'Custom persona', decision_bias_json: null, decision_bias: { caution: 0.5 },
+      knowledge_domain_json: null, knowledge_domains: [], preferred_tier: null,
+      continuity_key: id, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z',
+    }));
+    listAgentIdentitiesMock.mockResolvedValue(identities);
+    createDebateMock.mockResolvedValue({ id: 'captured-debate' });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await openAdvancedSettings(user);
+    await screen.findByText('Agent One');
+    act(() => { useAgentStore.setState({ selectedIds: new Set(['agent-1', 'agent-2']) }); });
+    const questionInput = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    const modelInput = screen.getByLabelText('home.byok_model_label');
+    const keyInput = screen.getByLabelText('home.byok_api_key_label');
+    const lowButton = screen.getByRole('button', { name: 'home.reasoning_low' });
+    await user.click(screen.getByRole('button', { name: 'home.reasoning_high' }));
+    fireEvent.change(questionInput, { target: { value: 'Reviewed debate question' } });
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    const dialog = screen.getByRole('dialog', { name: 'debate.review_title' });
+    expect(dialog).toHaveTextContent('reviewed-model');
+    expect(dialog).toHaveTextContent('Agent One');
+    expect(dialog).toHaveTextContent('Agent Two');
+    expect(dialog).not.toHaveTextContent('reviewed-private-key');
+    fireEvent.change(questionInput, { target: { value: 'Unreviewed question' } });
+    fireEvent.change(modelInput, { target: { value: 'unreviewed-model' } });
+    fireEvent.change(keyInput, { target: { value: 'unreviewed-key' } });
+    fireEvent.click(lowButton);
+    act(() => { useAgentStore.setState({ selectedIds: new Set(['agent-2']) }); });
+    expect(screen.getByTestId('debate-review-effort')).toHaveTextContent('home.reasoning_high');
+    await confirmDebateDialog(user);
+    expect(createDebateMock).toHaveBeenCalledWith('Reviewed debate question', undefined,
+      expect.objectContaining({ llmApiKey: 'reviewed-private-key', llmModel: 'reviewed-model',
+        llmBaseUrl: 'http://localhost:11434/v1', reasoningEffort: 'high' }),
+      { proposition: 'agent-1', opposition: 'agent-2' });
+  });
+
+  it('ignores repeated debate confirmation while its captured request is pending', async () => {
+    const user = userEvent.setup();
+    let resolveDebate!: (value: { id: string }) => void;
+    createDebateMock.mockImplementation(() => new Promise<{ id: string }>((resolve) => { resolveDebate = resolve; }));
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    fireEvent.change(screen.getByRole('textbox', { name: 'home.question_input_label' }), { target: { value: 'One launch only' } });
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    const button = within(screen.getByRole('dialog')).getByRole('button', { name: 'debate.review_start' });
+    act(() => { fireEvent.click(button); fireEvent.click(button); });
+    expect(createDebateMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'debate.review_starting' })).toBeDisabled();
+    expect(screen.queryByText('home.loading_title')).not.toBeInTheDocument();
+    await act(async () => { resolveDebate({ id: 'one-debate' }); });
+  });
+
+  it('does not open debate review during composition and captures the finalized question', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    const questionInput = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.compositionStart(questionInput);
+    fireEvent.change(questionInput, { target: { value: '正在输入' } });
+    const debateButton = screen.getByRole('button', { name: 'debate.entry_cta' });
+    expect(debateButton).toBeDisabled();
+    fireEvent.click(debateButton);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.compositionEnd(questionInput, { target: { value: '是否采纳夜间公交方案？' } });
+    await user.click(debateButton);
+    expect(within(screen.getByRole('dialog')).getByText('是否采纳夜间公交方案？')).toBeInTheDocument();
+    expect(createDebateMock).not.toHaveBeenCalled();
   });
 
   it('accepts bounded recovery settings as a preview and ignores provider or run-count fields', async () => {
@@ -990,6 +1137,7 @@ describe('InputView campaign progress', () => {
 
     await user.type(questionField as HTMLTextAreaElement, 'What if AI ruled every city?');
     await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    await confirmDebateDialog(user);
 
     await waitFor(() => {
       expect(createDebateMock).toHaveBeenCalledTimes(1);
@@ -1042,7 +1190,7 @@ describe('InputView campaign progress', () => {
     );
 
     expect(await screen.findByText('5 agents × 5 rounds · about 4 min for the main simulation')).toBeInTheDocument();
-    expect(screen.getByText('Debate Arena usually resolves in 3-5 minutes.')).toBeInTheDocument();
+    expect(screen.getByText('Two sides and one judge. Four speaking phases: opening, crossfire, rebuttal and closing, followed by a verdict.')).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('slider', { name: 'home.rounds_label' }), {
       target: { value: '10' },
@@ -2773,7 +2921,7 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
     expect(screen.getByRole('button', { name: /home\.mode_raw/i })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: /home\.viz_classic/i })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: /home\.viz_theater/i })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('button', { name: /home\.reasoning_off/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /home\.reasoning_default/i })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: /home\.runtime_preset_balanced/i })).toHaveAttribute('aria-pressed', 'true');
 
     await user.click(screen.getByRole('button', { name: /home\.mode_raw/i }));
@@ -4202,6 +4350,7 @@ describe('InputView apiUserId wiring (P1)', () => {
     await screen.findByText('Agent One');
     await user.type(screen.getAllByRole('textbox')[0], 'What if debate caps custom agents?');
     await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    await confirmDebateDialog(user);
 
     await waitFor(() => {
       expect(createDebateMock).toHaveBeenCalledWith(
@@ -4815,6 +4964,57 @@ describe('InputView Model Profile Integration', () => {
     expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
       modelProfileId: 'profile-1', modelProfileConfirmationToken: 'a'.repeat(64),
     }));
+  });
+
+  it('keeps captured debate role profiles and confirmation tokens when the selectors change', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true, llm_static_configured: false,
+      llm_profile_configured: true, model_profiles: { enabled: true } });
+    listModelProfilesMock.mockResolvedValue({ profiles: [mockProfiles[0], {
+      ...mockProfiles[0], id: 'profile-2', name: 'Changed profile', model: 'changed-model', confirmation_token: 'b'.repeat(64),
+    }], count: 2 });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await openAdvancedSettings(user);
+    const mainProfile = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    await waitFor(() => expect(mainProfile).toHaveValue('profile-1'));
+    const proposition = screen.getByLabelText('model_profiles.label_proposition');
+    fireEvent.change(screen.getByRole('textbox', { name: 'home.question_input_label' }), { target: { value: 'Freeze all role profiles' } });
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    fireEvent.change(proposition, { target: { value: 'profile-2' } });
+    expect(screen.getByTestId('debate-review-proposition')).toHaveTextContent('gpt-4o');
+    expect(screen.getByTestId('debate-review-proposition')).not.toHaveTextContent('changed-model');
+    await confirmDebateDialog(user);
+    expect(createDebateMock).toHaveBeenCalledWith('Freeze all role profiles', undefined, expect.objectContaining({
+      propositionModelProfileId: 'profile-1', oppositionModelProfileId: 'profile-1', judgeModelProfileId: 'profile-1',
+      profileConfirmationTokens: { 'profile-1': 'a'.repeat(64) },
+    }), undefined);
+  });
+
+  it('requires a new debate review after a backend profile-drift rejection', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true, llm_static_configured: false,
+      llm_profile_configured: true, model_profiles: { enabled: true } });
+    createDebateMock.mockRejectedValueOnce(Object.assign(new Error('Profile changed'), { code: 'MODEL_PROFILE_CHANGED', status: 409 }))
+      .mockResolvedValueOnce({ id: 'fresh-debate' });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await openAdvancedSettings(user);
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /model_profiles\.title/i })).toHaveValue('profile-1'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'home.question_input_label' }), { target: { value: 'Reconfirm this debate' } });
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    await confirmDebateDialog(user);
+    expect(await screen.findByText('home.launch_profile_changed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'debate.review_start' })).toBeDisabled();
+    const firstId = createDebateMock.mock.calls[0][2].clientRequestId;
+    listModelProfilesMock.mockResolvedValue({ profiles: [{ ...mockProfiles[0], model: 'review-again-model', confirmation_token: 'b'.repeat(64) }], count: 1 });
+    await user.click(screen.getByRole('button', { name: 'home.launch_profile_refresh' }));
+    expect(await screen.findByText('home.launch_profile_refreshed')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(createDebateMock).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    expect(screen.getByTestId('debate-review-judge')).toHaveTextContent('review-again-model');
+    await confirmDebateDialog(user);
+    expect(createDebateMock.mock.calls[1][2]).toMatchObject({ profileConfirmationTokens: { 'profile-1': 'b'.repeat(64) } });
+    expect(createDebateMock.mock.calls[1][2].clientRequestId).not.toBe(firstId);
   });
 
   it('refreshes a changed profile and requires a new confirmation before retrying', async () => {
@@ -5630,6 +5830,7 @@ describe('InputView Model Profile Integration', () => {
     const debateButton = screen.getByRole('button', { name: 'debate.entry_cta' });
     expect(debateButton).toBeEnabled();
     await user.click(debateButton);
+    await confirmDebateDialog(user);
 
     await waitFor(() => expect(createDebateMock).toHaveBeenCalledTimes(1));
     expect(createDebateMock).toHaveBeenCalledWith(
@@ -5730,6 +5931,7 @@ describe('InputView Model Profile Integration', () => {
       expect(simulationButton).toBeEnabled();
       expect(debateButton).toBeEnabled();
       await user.click(debateButton);
+    await confirmDebateDialog(user);
 
       await waitFor(() => expect(createDebateMock).toHaveBeenCalledTimes(1));
       const expectedProfileIds = {
@@ -5834,6 +6036,7 @@ describe('InputView Model Profile Integration', () => {
 
       await user.type(questionInput, 'Should provider B own this debate role?');
       await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    await confirmDebateDialog(user);
 
       await waitFor(() => expect(createDebateMock).toHaveBeenCalledTimes(1));
       const debateOptions = createDebateMock.mock.calls[0]?.[2] as
@@ -5878,6 +6081,7 @@ describe('InputView Model Profile Integration', () => {
     const debateButton = screen.getByRole('button', { name: 'debate.entry_cta' });
     await waitFor(() => expect(debateButton).not.toBeDisabled());
     await user.click(debateButton);
+    await confirmDebateDialog(user);
 
     await waitFor(() => {
       expect(createDebateMock).toHaveBeenCalledWith(

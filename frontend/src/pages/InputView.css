@@ -1648,6 +1648,25 @@
   color: var(--text-secondary);
 }
 
+.input-view__simulation-scope {
+  width: 100%;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.input-view__simulation-scope strong { color: var(--text-primary); }
+.input-view__simulation-scope p { margin: 4px 0 0; }
+.input-view__debate-hint {
+  margin: 8px 0 0;
+  max-width: 60ch;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.confirm-launch__debate-role dd > span { display: block; }
+
 .iv-security-notice {
   display: block;
   max-width: 640px;

@@ -64,6 +64,7 @@ from app.services.llm_client import (
     llm_call_json_with_stream_fallback,
     llm_request_scope,
     normalize_native_search_upstream,
+    resolve_reasoning_effort,
     sanitize_untrusted_text,
 )
 from app.services.llm_resolution import (
@@ -571,6 +572,7 @@ def _llm_scope_kwargs(
         native_search_upstream_override = None
     return {
         "purpose": purpose,
+        "reasoning_effort": resolve_reasoning_effort(overrides.get("reasoning_effort")),
         "requests_per_minute": overrides.get("requests_per_minute"),
         "tokens_per_minute": overrides.get("tokens_per_minute"),
         "concurrency": overrides.get("concurrency"),
@@ -1083,7 +1085,7 @@ async def _summarize_identity_compaction_group(
         with llm_request_scope(**_llm_scope_kwargs(_overrides, purpose="identity_compaction")):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
-                reasoning_effort="low",
+                reasoning_effort=_overrides.get("reasoning_effort"),
                 model=_overrides.get("model"),
                 api_key=_overrides.get("api_key"),
                 base_url=_overrides.get("base_url"),
@@ -1317,7 +1319,7 @@ async def _rewrite_single_branch_title_after_narration(
         raw_title = await asyncio.wait_for(
             llm_call(
                 prompt,
-                reasoning_effort="low",
+                reasoning_effort=_overrides.get("reasoning_effort"),
                 model=_overrides.get("model"),
                 api_key=_overrides.get("api_key"),
                 base_url=_overrides.get("base_url"),
@@ -3491,6 +3493,12 @@ async def _run_simulation_impl(
             include_quota_user_id=True,
         )
 
+        llm_overrides["reasoning_effort"] = resolve_reasoning_effort(
+            llm_overrides.get("reasoning_effort")
+            if llm_overrides.get("reasoning_effort") is not None
+            else ctx.get("reasoning_effort")
+        )
+
         # P4-E: BYOK overrides — received via function param (memory-only, not from DB).
         # Legacy parsed_context provider fields remain a fallback for non-profile rows.
         if not llm_overrides.get("model") and ctx.get("llm_model"):
@@ -4573,6 +4581,7 @@ async def _run_simulation_impl(
                     "base_url",
                     "model",
                     "temperature",
+                    "reasoning_effort",
                     "requests_per_minute",
                     "tokens_per_minute",
                     "concurrency",
@@ -5078,7 +5087,11 @@ def _domain_world_decision_prompt_v1(
             "set_if_expected 必须填写非 null expected_before，其余 operation 的 expected_before "
             "必须为 null。数值按 schema 使用 canonical "
             "字符串，boolean 使用 JSON boolean，enum 使用 canonical string。不得从发言、"
-            "self-report、world_state_changes 或承诺推断领域效果。以下仅是可选 "
+            "self-report、world_state_changes 或承诺推断领域效果。commitment_state 的 proposal "
+            "只表达本角色拟采纳的决策偏好，不代表已采纳或执行；只可引用 set_if_expected 且 "
+            "adoption_policy=unanimous_round_participants 的冻结规则。代码要求本轮所有参与角色"
+            "基于同一 N-1 状态提交同变量同目标的有效 proposal 才采纳；IDLE、缺失、无效或分歧"
+            "都会阻止采纳。不得替其他角色同意，不得声称已执行或加入自授权标志。以下仅是可选 "
             "action_parameters.domain_world_v1 的精确结构模板；无可靠领域意图时整键省略：\n"
             f"{group_json}\n"
             f"{context_block}"
@@ -5097,7 +5110,14 @@ def _domain_world_decision_prompt_v1(
             "other operation MUST use null expected_before. "
             "Use canonical numeric strings, JSON booleans, and canonical enum strings as defined "
             "by the schema. Never infer domain effects from speech, self-report, "
-            "world_state_changes, or commitments. The following is only the exact structural "
+            "world_state_changes, or commitments. A commitment_state proposal expresses only "
+            "this actor's preferred decision; it does not prove adoption or execution. It may "
+            "reference only a frozen set_if_expected rule with adoption_policy="
+            "unanimous_round_participants. Code requires every actor participating in this "
+            "completed round to submit a valid same-variable, same-target proposal from the "
+            "same N-1 state; IDLE, missing or invalid proposals, and disagreement block adoption. "
+            "Never consent for other actors, claim operational execution, or add a "
+            "self-authorization flag. The following is only the exact structural "
             "template for the optional action_parameters.domain_world_v1; omit the entire key "
             "when there is no grounded domain intent:\n"
             f"{group_json}\n"
@@ -5974,9 +5994,6 @@ async def _gather_agent_messages(
             ctx = _append_agent_debate_coherence_guidance(ctx, agent_tier, language)
             prior_transition_context = prior_transition_contexts.get(agent_id, "")
 
-            # Choose reasoning effort based on tier
-            effort = "low" if agent.get("tier") == "CROWD" else "medium"
-
             # Notify frontend: agent starts thinking
             await push_event(
                 {
@@ -6091,7 +6108,7 @@ async def _gather_agent_messages(
                         raw_decision = await asyncio.wait_for(
                             llm_call_json(
                                 decision_prompt,
-                                reasoning_effort="low",
+                                reasoning_effort=_overrides.get("reasoning_effort"),
                                 model=_overrides.get("model"),
                                 api_key=_overrides.get("api_key"),
                                 base_url=_overrides.get("base_url"),
@@ -6259,7 +6276,7 @@ async def _gather_agent_messages(
                         raw_text = await asyncio.wait_for(
                             llm_call(
                                 turn_prompt,
-                                reasoning_effort=effort,
+                                reasoning_effort=_overrides.get("reasoning_effort"),
                                 model=_overrides.get("model"),
                                 api_key=_overrides.get("api_key"),
                                 base_url=_overrides.get("base_url"),
@@ -7223,7 +7240,7 @@ async def _detect_fork(
         with llm_request_scope(**_llm_scope_kwargs(_overrides, purpose="scenario_fork_detection")):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
-                reasoning_effort="medium",
+                reasoning_effort=_overrides.get("reasoning_effort"),
                 model=_overrides.get("model"),
                 api_key=_overrides.get("api_key"),
                 base_url=_overrides.get("base_url"),
@@ -7601,7 +7618,7 @@ async def _generate_verdict(
             raw_text = await asyncio.wait_for(
                 llm_call(
                     prompt,
-                    reasoning_effort="low",
+                    reasoning_effort=_overrides.get("reasoning_effort"),
                     model=_overrides.get("model"),
                     api_key=_overrides.get("api_key"),
                     base_url=_overrides.get("base_url"),
@@ -7781,15 +7798,16 @@ async def _compress_round_memory(
         branch_id,
         before_round=start_round,
     )
-    summary = await compress_rounds(
-        msgs_text,
-        language=language,
-        previous_briefing=previous_briefing,
-        api_key=(llm_overrides or {}).get("api_key"),
-        base_url=(llm_overrides or {}).get("base_url"),
-        temperature=(llm_overrides or {}).get("temperature"),
-        model=(llm_overrides or {}).get("model"),
-    )
+    with llm_request_scope(**_llm_scope_kwargs(llm_overrides, purpose="scenario_compression")):
+        summary = await compress_rounds(
+            msgs_text,
+            language=language,
+            previous_briefing=previous_briefing,
+            api_key=(llm_overrides or {}).get("api_key"),
+            base_url=(llm_overrides or {}).get("base_url"),
+            temperature=(llm_overrides or {}).get("temperature"),
+            model=(llm_overrides or {}).get("model"),
+        )
 
     _save_round_summary(
         engine,
@@ -8159,6 +8177,7 @@ async def _narrate_branch_data(
         base_url=(llm_overrides or {}).get("base_url"),
         temperature=(llm_overrides or {}).get("temperature"),
         model=(llm_overrides or {}).get("model"),
+        reasoning_effort=(llm_overrides or {}).get("reasoning_effort"),
         web_context_block=web_context_block,
         question=question,
     )

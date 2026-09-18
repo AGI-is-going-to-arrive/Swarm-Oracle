@@ -21,6 +21,17 @@ afterEach(() => {
 });
 
 describe('useAgentConversation — WS event dispatch', () => {
+  it('settles buffered text once, preserving partial text on abort and ignoring late deltas', () => {
+    const onTurnSettled = vi.fn();
+    const { result } = renderHook(() => useAgentConversation({ onTurnSettled }));
+    act(() => {
+      result.current.dispatchWsEvent({ type: 'turn_started', thread_id: 'thread', turn_id: 'answer', sequence: 2 });
+      result.current.dispatchWsEvent({ type: 'turn_token_delta', turn_id: 'answer', delta: 'Partial answer' });
+      result.current.dispatch({ type: 'abort' });
+      result.current.dispatchWsEvent({ type: 'turn_token_delta', turn_id: 'answer', delta: 'Late text' });
+    });
+    expect(onTurnSettled).toHaveBeenCalledExactlyOnceWith({ id: 'answer', threadId: 'thread', sequence: 2, content: 'Partial answer', status: 'aborted' });
+  });
   it('keeps imperative handlers stable across rerenders', () => {
     const { result, rerender } = renderHook(
       ({ threadId }: { threadId?: string | null }) => useAgentConversation({ threadId }),

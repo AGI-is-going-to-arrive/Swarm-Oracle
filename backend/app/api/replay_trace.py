@@ -57,6 +57,7 @@ def _resolve_cursor_position(
     *,
     scenario_id: str,
     cursor_branch_id: str,
+    root_branch_id: str | None = None,
 ) -> str:
     """Return the ``Branch.id`` of the cursor row for stable keyset pagination.
 
@@ -65,12 +66,14 @@ def _resolve_cursor_position(
     if not isinstance(cursor_branch_id, str) or not cursor_branch_id.strip():
         raise api_error(400, "REPLAY_TRACE_CURSOR_INVALID", "Malformed cursor value")
 
-    cursor_row = session.exec(
-        select(Branch.id).where(
-            Branch.id == cursor_branch_id,
-            Branch.scenario_id == scenario_id,
-        )
-    ).first()
+    cursor_query = select(Branch.id).where(
+        Branch.id == cursor_branch_id,
+        Branch.scenario_id == scenario_id,
+        Branch.replay_source_branch_id.isnot(None),  # type: ignore[union-attr]
+    )
+    if root_branch_id is not None:
+        cursor_query = cursor_query.where(Branch.replay_source_branch_id == root_branch_id)
+    cursor_row = session.exec(cursor_query).first()
     if cursor_row is None:
         raise api_error(400, "REPLAY_TRACE_CURSOR_INVALID", "Cursor branch not found in scenario")
     return cursor_row
@@ -229,6 +232,7 @@ def get_replay_trace(
                     session,
                     scenario_id=scenario_id,
                     cursor_branch_id=after,
+                    root_branch_id=normalized_root,
                 )
                 stmt = stmt.where(Branch.id > cursor_id)
 

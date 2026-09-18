@@ -887,7 +887,7 @@ async def generate_persona_with_llm(
         raw = await llm_call_json_with_stream_fallback(
             prompt,
             temperature=0.85,
-            reasoning_effort="medium",
+            reasoning_effort=overrides.get("reasoning_effort"),
             model=overrides.get("model"),
             api_key=overrides.get("api_key"),
             base_url=overrides.get("base_url"),

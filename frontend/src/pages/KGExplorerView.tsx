@@ -33,6 +33,7 @@ import { resolveKGG6Tokens, TYPE_LABEL_I18N } from '../lib/graphTokens';
 import { KG_DEGRADE_THRESHOLDS, buildKgG6Options, toKgG6Data } from '../lib/kgGraphConfig';
 import { buildSessionHeaders } from '../api/client';
 import { NodeConversationSheet, type NodeConversationOrigin } from '../components/kg/NodeConversationSheet';
+import { NodeDetailPanel } from '../components/NodeDetailPanel';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -183,6 +184,8 @@ export default function KGExplorerView() {
   const [minimapContainer, setMinimapContainer] = useState<HTMLDivElement | null>(null);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<KGSheetState>(createClosedSheetState);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [detailFocusTarget, setDetailFocusTarget] = useState<HTMLElement | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const loadRequestIdRef = useRef(0);
@@ -247,6 +250,7 @@ export default function KGExplorerView() {
 
   useEffect(() => {
     setSheetState(createClosedSheetState());
+    setSelectedNodeId(null);
   }, [scenarioId]);
 
   // Build G6 node/edge data — memoized so hook doesn't rebuild.
@@ -301,24 +305,15 @@ export default function KGExplorerView() {
   const isSheetSourceVisible =
     !sheetState.open || visibleNodeIds.has(sheetState.origin.nodeId);
   const effectiveSheetOpen = sheetState.open && isSheetSourceVisible;
+  const selectedNode = selectedNodeId && visibleNodeIds.has(selectedNodeId) ? graphNodeById.get(selectedNodeId) ?? null : null;
+  const noFilterMatches = Boolean(graphData?.nodes.length) && g6GraphData.nodes.length === 0;
 
-  // Node click → open NodeConversationSheet directly (FE-3-seq wire-up).
-  const handleNodeClick = useCallback(
-    (evt: unknown) => {
-      const target = (evt as {
-        target?: {
-          id?: string;
-          type?: string;
-          data?: { kgType?: unknown };
-          get?: (key: string) => unknown;
-        };
-      } | undefined)?.target;
-      const nodeId = String(target?.id ?? target?.get?.('id') ?? '');
-      const graphNode = graphNodeById.get(nodeId);
-      const targetKgType = target?.data?.kgType;
-      const nodeType = graphNode?.type
-        ?? (typeof targetKgType === 'string' ? targetKgType : null)
-        ?? 'unknown';
+  const askSelectedNode = useCallback(
+    () => {
+      const graphNode = selectedNode;
+      if (!graphNode) return;
+      const nodeId = graphNode.id;
+      const nodeType = graphNode.type;
       const payload = typeof graphNode?.payload === 'object' && graphNode.payload !== null && !Array.isArray(graphNode.payload)
         ? graphNode.payload as Record<string, unknown>
         : {};
@@ -364,8 +359,18 @@ export default function KGExplorerView() {
         },
       });
     },
-    [graphData?.edges, graphNodeById, scenarioId, t],
+    [graphData?.edges, graphNodeById, scenarioId, selectedNode, t],
   );
+
+  const handleNodeClick = useCallback((event: unknown) => {
+    const target = (event as { target?: { id?: string; get?: (key: string) => unknown } } | undefined)?.target;
+    const nodeId = String(target?.id ?? target?.get?.('id') ?? '');
+    if (!graphNodeById.has(nodeId)) return;
+    setDetailFocusTarget(containerRef.current);
+    setSelectedNodeId(nodeId);
+    setSheetState(createClosedSheetState());
+    setMobilePane('sidebar');
+  }, [graphNodeById]);
 
   const tokens = useMemo(() => resolveKGG6Tokens(theme), [theme]);
   const [reducedMotion, setReducedMotion] = useState(
@@ -512,6 +517,7 @@ export default function KGExplorerView() {
     >
       {/* Header / controls */}
       <header style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+        <Link to={`/result/${encodeURIComponent(scenarioId)}`}>{t('kg_explorer.back_to_result', 'Back to Result')}</Link>
         <h1 style={{ fontSize: '1.125rem', fontWeight: 600, margin: 0 }}>
           {t('kg_explorer.title', 'KG Explorer')}
         </h1>
@@ -523,6 +529,7 @@ export default function KGExplorerView() {
           onChange={(e) => {
             setSearchTerm(e.target.value);
             setSheetState(createClosedSheetState());
+            setSelectedNodeId(null);
           }}
           style={{ padding: '0.25rem 0.5rem', minWidth: 160 }}
           aria-label={t('kg_explorer.search_aria', 'Search graph nodes')}
@@ -541,6 +548,7 @@ export default function KGExplorerView() {
                 type="button"
                 onClick={() => {
                   setSheetState(createClosedSheetState());
+                  setSelectedNodeId(null);
                   setTypeFilter((prev) => {
                     const next = new Set(prev);
                     if (next.has(type)) next.delete(type);
@@ -559,7 +567,7 @@ export default function KGExplorerView() {
                   cursor: 'pointer',
                 }}
               >
-                {t(TYPE_LABEL_I18N[type]?.[0] ?? type, TYPE_LABEL_I18N[type]?.[1] ?? type)}
+                {TYPE_LABEL_I18N[type] ? t(TYPE_LABEL_I18N[type][0], TYPE_LABEL_I18N[type][1]) : type}
               </button>
             );
           })}
@@ -599,6 +607,10 @@ export default function KGExplorerView() {
               background: tokens.background,
             }}
           />
+          {noFilterMatches ? <div role="status" data-testid="kg-explorer-no-matches" style={{ padding: '1rem' }}>
+            <p>{t('kg_explorer.no_filter_matches', 'No nodes match these filters.')}</p>
+            <button type="button" onClick={() => { setSearchTerm(''); setTypeFilter(new Set()); setSelectedNodeId(null); setSheetState(createClosedSheetState()); }}>{t('kg_explorer.clear_filters', 'Clear search and filters')}</button>
+          </div> : null}
           {dataLoading && (
             <p role="status" style={{ fontSize: '0.75rem', padding: '0.25rem' }}>
               {t('common.loading', 'Loading…')}
@@ -652,6 +664,7 @@ export default function KGExplorerView() {
               borderRadius: 4,
               overflow: 'hidden',
               position: 'relative',
+              ...(noFilterMatches ? { display: 'none' } : {}),
             }}
           />
           <p style={{ fontSize: '0.8rem' }}>
@@ -668,6 +681,13 @@ export default function KGExplorerView() {
                     }))
               : '—'}
           </p>
+          {selectedNode && !effectiveSheetOpen ? <NodeDetailPanel
+            inline
+            node={selectedNode}
+            restoreFocusTarget={detailFocusTarget}
+            onClose={() => { setSelectedNodeId(null); setMobilePane('graph'); }}
+            onAsk={askSelectedNode}
+          /> : null}
         </aside>
       </div>
 
@@ -761,10 +781,12 @@ export default function KGExplorerView() {
           onOpenChange={(next) =>
             setSheetState((prev) => (next ? prev : createClosedSheetState()))
           }
-          onClose={() => setSheetState(createClosedSheetState())}
+          onClose={() => { setSheetState(createClosedSheetState()); setSelectedNodeId(null); setMobilePane('graph'); }}
           scenarioId={sheetState.scenarioId}
           identityId={sheetState.identityId}
           origin={sheetState.origin}
+          restoreFocusTarget={detailFocusTarget}
+          restoreFocusFallback={containerRef}
         />
       )}
     </main>

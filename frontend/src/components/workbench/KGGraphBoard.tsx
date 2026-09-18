@@ -28,6 +28,7 @@ export interface KGGraphBoardProps {
   branchId?: string;
   onNodeClick?: (node: unknown) => void;
   className?: string;
+  inspectionActive?: boolean;
   themeOverride?: 'light' | 'dark';
   resizeKey?: unknown;
 }
@@ -83,6 +84,7 @@ export default function KGGraphBoard({
   className,
   themeOverride,
   resizeKey,
+  inspectionActive = true,
 }: KGGraphBoardProps) {
   const { t } = useTranslation();
   const autoTheme = useAutoTheme();
@@ -129,6 +131,8 @@ export default function KGGraphBoard({
     position: { x: number; y: number };
   } | null>(null);
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailFocusTarget, setDetailFocusTarget] = useState<HTMLElement | null>(null);
 
   const markGraphFilterChanged = useCallback(() => {
     setFilterVersion((version) => version + 1);
@@ -179,6 +183,16 @@ export default function KGGraphBoard({
       return { ...prev, key: resetKey, lockedNodeId: next };
     });
   }, [resetKey]);
+  const [previousInspectionActive, setPreviousInspectionActive] = useState(inspectionActive);
+  if (previousInspectionActive !== inspectionActive) {
+    setPreviousInspectionActive(inspectionActive);
+    if (!inspectionActive) {
+      setSelectionState({ key: resetKey, selectedNode: null, highlightedNodeId: null, lockedNodeId: null });
+      setQuickCardState(null);
+      setDetailOpen(false);
+      setSheetState(previous => ({ ...previous, open: false }));
+    }
+  }
 
   const g6GraphData = useMemo(() => {
     if (!graphData) return { nodes: [], edges: [], truncatedFromCount: null as number | null };
@@ -241,6 +255,7 @@ export default function KGGraphBoard({
     ? graphNodeById.get(effectiveFocusedNodeId) ?? null
     : null;
   const effectiveSheetOpen =
+    inspectionActive &&
     sheetState.open &&
     sheetState.key === resetKey &&
     visibleNodeIds.has(sheetState.origin.nodeId);
@@ -250,9 +265,11 @@ export default function KGGraphBoard({
     typeFilter.size > 0 ||
     lockedNodeId !== null ||
     highlightedNodeId !== null;
-  const showAllNodeLabels =
-    g6GraphData.nodes.length <= KG_DEGRADE_THRESHOLDS.nodeLabelLimit ||
-    hasFocusedGraphIntent;
+  const narrowLabels = isMobile || canvasSize.width < 720;
+  const showAllNodeLabels = narrowLabels
+    ? g6GraphData.nodes.length <= 2
+    : g6GraphData.nodes.length <= KG_DEGRADE_THRESHOLDS.nodeLabelLimit || (hasFocusedGraphIntent && g6GraphData.nodes.length <= 8);
+  const noFilterMatches = Boolean(graphData?.nodes.length) && g6GraphData.nodes.length === 0;
 
   const styledG6Data = useMemo(() => {
     return {
@@ -260,7 +277,7 @@ export default function KGGraphBoard({
         const degree = degreeMap.get(n.id) ?? 1;
         const size = computeNodeSize(degree);
         const nodeStyle = getKGNodeStyle(n.data.kgType, theme);
-        const showNodeLabel = showAllNodeLabels;
+        const showNodeLabel = showAllNodeLabels || [effectiveFocusedNodeId, effectiveLockedNodeId, effectiveSelectedNode?.id, highlightedNodeId].includes(n.id);
         const agentId = n.data.agentId;
         const isEventWithAgent = n.data.kgType === 'event' && agentId;
         return {
@@ -287,7 +304,7 @@ export default function KGGraphBoard({
         },
       })),
     };
-  }, [g6GraphData, degreeMap, theme, effectiveShowLabels, showAllNodeLabels]);
+  }, [g6GraphData, degreeMap, theme, effectiveShowLabels, showAllNodeLabels, effectiveFocusedNodeId, effectiveLockedNodeId, effectiveSelectedNode?.id, highlightedNodeId]);
 
   const shouldDisableAnimation =
     reducedMotion || g6GraphData.nodes.length > KG_DEGRADE_THRESHOLDS.animationLimit;
@@ -318,6 +335,7 @@ export default function KGGraphBoard({
       scenarioId,
       identityId: null,
       origin: {
+        surface: 'knowledge',
         nodeId,
         nodeType,
         excerpt: content || label,
@@ -345,6 +363,8 @@ export default function KGGraphBoard({
       const nodeId = String(tgt?.id ?? tgt?.get?.('id') ?? '');
       const graphNode = graphNodeById.get(nodeId);
       if (!graphNode) return;
+      setSheetState(previous => ({ ...previous, open: false }));
+      setDetailFocusTarget(containerRef.current);
 
       if (isMobile) {
         setLockedNodeId((prev) => (prev === nodeId ? null : nodeId));
@@ -360,6 +380,7 @@ export default function KGGraphBoard({
         });
       } else {
         setQuickCardState(null);
+        setDetailOpen(true);
         setSelectedNode({
           id: graphNode.id,
           label: graphNode.label,
@@ -367,12 +388,11 @@ export default function KGGraphBoard({
           round: graphNode.round,
           payload: graphNode.payload,
         });
-        openConversationSheet(graphNode.id, graphNode.type, graphNode.label, graphNode.round, graphNode.payload);
       }
 
       onNodeClick?.(tgt);
     },
-    [graphNodeById, onNodeClick, isMobile, setSelectedNode, setLockedNodeId, resetKey, openConversationSheet],
+    [graphNodeById, onNodeClick, isMobile, setSelectedNode, setLockedNodeId, resetKey],
   );
 
   const handleOpenDetail = useCallback(() => {
@@ -380,6 +400,8 @@ export default function KGGraphBoard({
     const fullNode = graphNodeById.get(effectiveQuickCardState.node.id);
     const payload = fullNode?.payload ?? null;
     setQuickCardState(null);
+    setDetailOpen(true);
+    setDetailFocusTarget(containerRef.current);
     setSelectedNode({
       id: effectiveQuickCardState.node.id,
       label: effectiveQuickCardState.node.label,
@@ -387,14 +409,7 @@ export default function KGGraphBoard({
       round: effectiveQuickCardState.node.round,
       payload,
     });
-    openConversationSheet(
-      effectiveQuickCardState.node.id,
-      effectiveQuickCardState.node.type,
-      effectiveQuickCardState.node.label,
-      effectiveQuickCardState.node.round,
-      payload,
-    );
-  }, [effectiveQuickCardState, graphNodeById, setSelectedNode, openConversationSheet]);
+  }, [effectiveQuickCardState, graphNodeById, setSelectedNode]);
 
   const closeQuickCard = useCallback(() => setQuickCardState(null), []);
 
@@ -566,6 +581,9 @@ export default function KGGraphBoard({
       if (fullNode) {
         const payload = fullNode.payload ?? null;
         setQuickCardState(null);
+        setDetailOpen(true);
+        setDetailFocusTarget(containerRef.current);
+        setSheetState(previous => ({ ...previous, open: false }));
         setSelectedNode({
           id: fullNode.id,
           label: fullNode.label,
@@ -573,10 +591,10 @@ export default function KGGraphBoard({
           round: fullNode.round,
           payload,
         });
-        openConversationSheet(fullNode.id, fullNode.type, fullNode.label, fullNode.round, payload);
+        onNodeClick?.(fullNode);
       }
     }
-  }, [focusedNodeId, g6GraphData.nodes, graphNodeById, isMobile, resetKey, canvasSize, graphRef, openConversationSheet, setSelectedNode]);
+  }, [focusedNodeId, g6GraphData.nodes, graphNodeById, isMobile, resetKey, canvasSize, graphRef, onNodeClick, setSelectedNode]);
 
   const availableTypes = useMemo(
     () => Array.from(new Set(graphData?.nodes.map((n) => n.type) ?? [])).sort(),
@@ -926,6 +944,8 @@ export default function KGGraphBoard({
       )}
 
       {/* Canvas */}
+      {narrowLabels && !showAllNodeLabels ? <p className="text-sm" role="status">{t('kg_graph_board.focused_labels_hint', 'Select or focus a node to read its label.')}</p> : null}
+      <div style={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
       <div
         ref={containerRef}
         data-testid="kg-graph-board-canvas"
@@ -939,6 +959,11 @@ export default function KGGraphBoard({
         )}
         className="kg-canvas-shell kg-canvas-cursor"
       />
+      {noFilterMatches ? <div role="status" data-testid="kg-graph-board-no-matches" style={{ position: 'absolute', inset: 0, display: 'grid', placeContent: 'center', gap: 12, textAlign: 'center', padding: 16 }}>
+        <p>{t('kg_graph_board.no_filter_matches', 'No nodes match these filters.')}</p>
+        <button type="button" className="kg-icon-btn" onClick={() => { markGraphFilterChanged(); setSearchTerm(''); setTypeFilter(new Set()); }}>{t('kg_graph_board.clear_filters', 'Clear search and filters')}</button>
+      </div> : null}
+      </div>
 
       {/* Minimap container */}
       <div
@@ -947,10 +972,11 @@ export default function KGGraphBoard({
         className="kg-minimap"
         aria-label={t('kg_graph_board.minimap_aria', 'Graph minimap')}
         role="img"
+        style={noFilterMatches ? { display: 'none' } : undefined}
       />
 
       {/* NodeQuickCard */}
-      {effectiveQuickCardState && (
+      {inspectionActive && effectiveQuickCardState && (
         <NodeQuickCard
           node={effectiveQuickCardState.node}
           position={effectiveQuickCardState.position}
@@ -961,9 +987,14 @@ export default function KGGraphBoard({
       )}
 
       {/* NodeDetailPanel */}
-      {effectiveSelectedNode && (
+      {inspectionActive && detailOpen && effectiveSelectedNode && (
         <NodeDetailPanel
           node={effectiveSelectedNode}
+          restoreFocusTarget={detailFocusTarget}
+          onAsk={() => {
+            setDetailOpen(false);
+            openConversationSheet(effectiveSelectedNode.id, effectiveSelectedNode.type, effectiveSelectedNode.label, effectiveSelectedNode.round ?? null, effectiveSelectedNode.payload);
+          }}
           onClose={() => {
             setSelectedNode(null);
             setLockedNodeId(null);
@@ -1078,6 +1109,8 @@ export default function KGGraphBoard({
           scenarioId={sheetState.scenarioId}
           identityId={sheetState.identityId}
           origin={sheetState.origin}
+          restoreFocusTarget={detailFocusTarget}
+          restoreFocusFallback={containerRef}
         />
       )}
     </div>

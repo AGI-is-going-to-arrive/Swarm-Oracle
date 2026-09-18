@@ -263,6 +263,45 @@ afterEach(() => {
 });
 
 describe('report content language resolution', () => {
+  it('keeps domain state distinct from narrative and preserves canonical numeric units', async () => {
+    await i18n.changeLanguage('en');
+    setCap({});
+    setCtx({ full_report: makeReport({
+      domain_consistency: {
+        status: 'unverified', branch_id: 'b-1', schema_hash: 'schema',
+        as_of_round: 3, state_revision: 'revision', failure_code: null,
+        epistemic_scope: 'scenario_assumption', values: [{
+          variable_id: 'private_variable_key', label_en: 'Departure delay', label_zh: '末班延迟',
+          semantic_role: 'commitment_state', unit: 'second', value: '1800',
+        }],
+      },
+    }) });
+    render(<ResultReportPanel variant="standalone" isZh={false} />);
+    fireEvent.click(screen.getByText('Check the saved simulation state'));
+    expect(screen.getByText('Departure delay')).toBeVisible();
+    expect(screen.getByText('1800 s')).toBeVisible();
+    expect(screen.getByText('Adopted simulation decision')).toBeVisible();
+    expect(screen.getByText(/A proposal is not execution/)).toBeVisible();
+    expect(screen.queryByText('private_variable_key')).not.toBeInTheDocument();
+    expect(mockedGenerateReport).not.toHaveBeenCalled();
+  });
+
+  it('does not turn unavailable domain state into zero-valued evidence', async () => {
+    await i18n.changeLanguage('en');
+    setCap({});
+    setCtx({ full_report: makeReport({
+      domain_consistency: {
+        status: 'unavailable', branch_id: 'b-1', schema_hash: null,
+        as_of_round: null, state_revision: null, failure_code: 'DOMAIN_SCHEMA_UNAVAILABLE',
+        epistemic_scope: 'scenario_assumption', values: [],
+      },
+    }) });
+    render(<ResultReportPanel variant="standalone" isZh={false} />);
+    fireEvent.click(screen.getByText('Check the saved simulation state'));
+    expect(screen.getByText(/This report has no verifiable domain state/)).toBeVisible();
+    expect(screen.queryByRole('definition')).not.toBeInTheDocument();
+  });
+
   it('falls back from an English UI to the only available Chinese report content', () => {
     const report = makeReport({
       language: 'zh',

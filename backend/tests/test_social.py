@@ -29,7 +29,7 @@ from app.models import (
     SimulationActionType,
 )
 from app.models.database import get_engine
-from app.services.llm_client import LLMError
+from app.services.llm_client import LLMError, resolve_reasoning_effort
 
 
 def _make_signed_session_token(secret: str, subject: str) -> str:
@@ -1506,13 +1506,18 @@ def test_social_copy_rejects_unowned_model_profile(
     assert called is False
 
 
+@pytest.mark.parametrize("scenario_effort", [None, "high"])
 def test_social_copy_model_profile_threads_scope_and_provider(
     client: TestClient,
     monkeypatch,
+    scenario_effort,
 ):
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
     monkeypatch.setattr(settings, "FEATURE_SOCIAL_HEADLINES", True, raising=False)
     monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
-    scenario_id = _seed_social_scenario(user_id="social-owner")
+    scenario_id = _seed_social_scenario(
+        user_id="social-owner", parsed_context={"reasoning_effort": scenario_effort},
+    )
     profile_id = _seed_model_profile(
         user_id="social-owner",
         model="profile-social-model",
@@ -1533,6 +1538,7 @@ def test_social_copy_model_profile_threads_scope_and_provider(
 
     async def fake_llm(_prompt: str, **kwargs):
         captured["llm"] = dict(kwargs)
+        captured["effective_effort"] = resolve_reasoning_effort()
         return "profile social copy"
 
     monkeypatch.setattr(social_api, "llm_request_scope", spy_scope)
@@ -1550,8 +1556,10 @@ def test_social_copy_model_profile_threads_scope_and_provider(
     assert captured["llm"]["api_key"] == "sk-social-profile"
     assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
     assert captured["llm"]["model"] == "profile-social-model"
+    assert captured["effective_effort"] == (scenario_effort or "low")
     assert captured["scope"] == {
         "quota_key": "user:social-owner",
+        "reasoning_effort": scenario_effort or "low",
         "purpose": "social_copy",
         "requests_per_minute": 19,
         "tokens_per_minute": 1900,
@@ -1562,10 +1570,13 @@ def test_social_copy_model_profile_threads_scope_and_provider(
     }
 
 
+@pytest.mark.parametrize("scenario_effort", [None, "high"])
 def test_social_copy_rehydrates_profile_from_parsed_context(
     client: TestClient,
     monkeypatch,
+    scenario_effort,
 ):
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
     monkeypatch.setattr(settings, "FEATURE_SOCIAL_HEADLINES", True, raising=False)
     monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
     profile_id = _seed_model_profile(
@@ -1583,6 +1594,7 @@ def test_social_copy_rehydrates_profile_from_parsed_context(
         user_id="social-owner",
         parsed_context={
             "_language": "English",
+            "reasoning_effort": scenario_effort,
             "model_profile_id": profile_id,
             "llm_concurrency": 1,
             "supports_structured_outputs": True,
@@ -1598,6 +1610,7 @@ def test_social_copy_rehydrates_profile_from_parsed_context(
 
     async def fake_llm(_prompt: str, **kwargs):
         captured["llm"] = dict(kwargs)
+        captured["effective_effort"] = resolve_reasoning_effort()
         return "stored profile social copy"
 
     monkeypatch.setattr(social_api, "llm_request_scope", spy_scope)
@@ -1610,8 +1623,10 @@ def test_social_copy_rehydrates_profile_from_parsed_context(
     assert captured["llm"]["api_key"] == "sk-stored-social"
     assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
     assert captured["llm"]["model"] == "stored-social-model"
+    assert captured["effective_effort"] == (scenario_effort or "low")
     assert captured["scope"] == {
         "quota_key": "user:social-owner",
+        "reasoning_effort": scenario_effort or "low",
         "purpose": "social_copy",
         "requests_per_minute": 37,
         "tokens_per_minute": 3700,
@@ -1723,13 +1738,16 @@ def test_social_copy_stored_profile_missing_rejects_key_only_override(
     assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
 
 
-def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
+@pytest.mark.parametrize("scenario_effort", [None, "high"])
+def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch, scenario_effort):
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
     scenario = Scenario(
         id="scenario-social-headlines",
         question="What if harbor councils publish every correction?",
         status=ScenarioStatus.DONE,
         parsed_context={
             "_language": "English",
+            "reasoning_effort": scenario_effort,
             "user_id": "social-owner",
             "llm_api_key": "sk-social-headline-profile",
             "llm_base_url": "https://api.openai.com/v1",
@@ -1762,6 +1780,7 @@ def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
     async def fake_llm(prompt: str, **kwargs):
         captured["prompt"] = prompt
         captured["llm"] = dict(kwargs)
+        captured["effective_effort"] = resolve_reasoning_effort()
         return json.dumps({
             "headline_cards": [
                 {
@@ -1784,8 +1803,10 @@ def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
     assert captured["llm"]["api_key"] == "sk-social-headline-profile"
     assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
     assert captured["llm"]["model"] == "headline-profile-model"
+    assert captured["effective_effort"] == (scenario_effort or "low")
     assert captured["scope"] == {
         "quota_key": "user:social-owner",
+        "reasoning_effort": scenario_effort or "low",
         "purpose": "social_headline_cards",
         "requests_per_minute": 23,
         "tokens_per_minute": 2300,
@@ -1796,7 +1817,9 @@ def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
     }
 
 
-def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatch):
+@pytest.mark.parametrize("scenario_effort", [None, "high"])
+def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatch, scenario_effort):
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
     monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
     profile_id = _seed_model_profile(
         user_id="social-owner",
@@ -1816,6 +1839,7 @@ def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatc
         user_id="social-owner",
         parsed_context={
             "_language": "English",
+            "reasoning_effort": scenario_effort,
             "model_profile_id": profile_id,
             "llm_concurrency": 1,
             "supports_structured_outputs": False,
@@ -1840,6 +1864,7 @@ def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatc
 
     async def fake_llm(_prompt: str, **kwargs):
         captured["llm"] = dict(kwargs)
+        captured["effective_effort"] = resolve_reasoning_effort()
         return json.dumps({
             "headline_cards": [
                 {
@@ -1860,8 +1885,10 @@ def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatc
     assert captured["llm"]["api_key"] == "sk-stored-headline"
     assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
     assert captured["llm"]["model"] == "stored-headline-model"
+    assert captured["effective_effort"] == (scenario_effort or "low")
     assert captured["scope"] == {
         "quota_key": "user:social-owner",
+        "reasoning_effort": scenario_effort or "low",
         "purpose": "social_headline_cards",
         "requests_per_minute": 41,
         "tokens_per_minute": 4100,

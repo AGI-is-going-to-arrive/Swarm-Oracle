@@ -5023,6 +5023,7 @@ def test_run_ending_room_background_skips_when_runtime_lock_is_busy(monkeypatch)
 
 
 def test_run_ending_room_background_fails_closed_when_runtime_lock_is_lost_midflight(monkeypatch):
+    monkeypatch.setattr(ending_room_service_module.settings, "LLM_REASONING_EFFORT", "low")
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
     snapshot, created = create_ending_room(
         scenario_id,
@@ -5036,7 +5037,8 @@ def test_run_ending_room_background_fails_closed_when_runtime_lock_is_lost_midfl
     def _fake_build_room_plan(_session, _room, participants):
         return _stub_runtime_lock_regression_plan(participants)
 
-    async def _fake_enhance(room, participants, planned_turns, result):
+    async def _fake_enhance(room, participants, planned_turns, result, *, llm_overrides):
+        assert llm_overrides["reasoning_effort"] == "low"
         return planned_turns, result
 
     def _fake_refresh_runtime_lock(lease, *, lease_seconds):
@@ -5083,6 +5085,7 @@ def test_run_ending_room_background_fails_closed_when_runtime_lock_is_lost_midfl
 
 
 def test_run_ending_room_background_fails_closed_when_runtime_lock_refresh_raises(monkeypatch):
+    monkeypatch.setattr(ending_room_service_module.settings, "LLM_REASONING_EFFORT", "low")
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
     snapshot, created = create_ending_room(
         scenario_id,
@@ -5096,7 +5099,8 @@ def test_run_ending_room_background_fails_closed_when_runtime_lock_refresh_raise
     def _fake_build_room_plan(_session, _room, participants):
         return _stub_runtime_lock_regression_plan(participants)
 
-    async def _fake_enhance(room, participants, planned_turns, result):
+    async def _fake_enhance(room, participants, planned_turns, result, *, llm_overrides):
+        assert llm_overrides["reasoning_effort"] == "low"
         return planned_turns, result
 
     def _boom_refresh_runtime_lock(_lease, *, lease_seconds):

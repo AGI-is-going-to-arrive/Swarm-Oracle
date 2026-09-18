@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 import { __test__ as batchATest } from "./e2e-phase3-batch-a.mjs";
 import { __test__ as batchBTest } from "./e2e-phase3-batch-b.mjs";
@@ -22,6 +23,96 @@ import {
 import {
   classifyWsAuthHardeningProbe,
 } from "./e2e-ws-contract-suite.mjs";
+
+test("Theater layout probe refuses live mode before launching a browser", () => {
+  assert.throws(
+    () => e2eSuiteTest.assertOfflineTheaterLayoutMode(false),
+    /requires SWARM_E2E_FIXTURE_MODE=1/,
+  );
+  assert.doesNotThrow(() => e2eSuiteTest.assertOfflineTheaterLayoutMode(true));
+});
+
+test("Theater layout fixture includes the saved-history siblings that previously crushed the stage", () => {
+  const { scenario, effects } = e2eSuiteTest.createTheaterLayoutFixture();
+  assert.equal(scenario.status, "done");
+  assert.equal(scenario.visualization_enabled, true);
+  assert.equal(scenario.snapshot_import.worker_resumed, false);
+  assert.equal(scenario.snapshot_import.reason_code, "READ_ONLY_SNAPSHOT");
+  assert.ok(scenario.messages.length > 0);
+  assert.ok(scenario.branches.length > 1);
+  for (const branch of scenario.branches) {
+    if (branch.parent_branch_id === null) assert.equal(branch.fork_round, 0);
+    else assert.ok(scenario.branches.some((parent) => (
+      parent.id === branch.parent_branch_id && parent.fork_round < branch.fork_round
+    )));
+    assert.ok(scenario.messages.filter((message) => message.branch === branch.id)
+      .every((message) => message.round > branch.fork_round));
+  }
+  assert.equal(scenario.domain_world.branch_states.length, scenario.branches.length);
+  assert.ok(effects.effects.length > 0);
+  assert.equal(createFixtureStore().getScenario(scenario.id).snapshot_import, undefined);
+});
+
+test("Theater geometry gate rejects the audited tiny and clipped canvases", () => {
+  const geometry = {
+    canvas: { width: 800, height: 450 },
+    container: { width: 802, height: 452 },
+    visible: { width: 800, height: 450 },
+    root: { scrollWidth: 1280, clientWidth: 1280, overflowY: "auto" },
+    wrapperPosition: "relative", documentOverflow: 0,
+  };
+  assert.doesNotThrow(() => e2eSuiteTest.assertTheaterLayoutGeometry(geometry, { width: 1280 }));
+  assert.throws(() => e2eSuiteTest.assertTheaterLayoutGeometry({
+    ...geometry, canvas: { width: 43, height: 24 }, container: { width: 1389, height: 24 },
+  }, { width: 1440 }), /too small/);
+  assert.throws(() => e2eSuiteTest.assertTheaterLayoutGeometry({
+    ...geometry, canvas: { width: 363, height: 204 }, visible: { width: 363, height: 0 },
+  }, { width: 390 }), /clipped/);
+  assert.throws(() => e2eSuiteTest.assertTheaterLayoutGeometry({
+    ...geometry, root: { ...geometry.root, scrollWidth: 1350 },
+  }, { width: 1280 }), /horizontally/);
+  assert.throws(() => e2eSuiteTest.assertTheaterLayoutGeometry({
+    ...geometry, container: { width: 1200, height: 450 },
+  }, { width: 1280 }), /bubble coordinates/);
+  const mobile = {
+    ...geometry, canvas: { width: 370, height: 208 },
+    container: { width: 370, height: 208, left: 0, right: 370, top: 0, bottom: 208 },
+    visible: { width: 370, height: 208 },
+    root: { ...geometry.root, scrollWidth: 390, clientWidth: 390 },
+    bubbles: [{ left: 8, right: 308, top: 8, bottom: 88 }],
+  };
+  assert.doesNotThrow(() => e2eSuiteTest.assertTheaterLayoutGeometry(mobile, { width: 390 }));
+  assert.throws(() => e2eSuiteTest.assertTheaterLayoutGeometry({
+    ...mobile, bubbles: [{ left: -70, right: 230, top: 8, bottom: 88 }],
+  }, { width: 390 }), /speech is clipped/);
+});
+
+test("Theater snapshot WS fixture authenticates without injecting live events and still blocks unknown streams", () => {
+  const { scenario } = e2eSuiteTest.createTheaterLayoutFixture();
+  const timers = [];
+  const window = {
+    location: { href: "http://fixture.local/", host: "fixture.local" },
+    WebSocket: class {
+      constructor() { throw new Error("Unexpected native WebSocket"); }
+    },
+    setTimeout(callback) { timers.push(callback); return timers.length; },
+    clearTimeout() {},
+  };
+  class FixtureEvent {
+    constructor(type, options = {}) { this.type = type; Object.assign(this, options); }
+  }
+  runInNewContext(e2eSuiteTest.buildTheaterLayoutWsFixture(scenario).content, {
+    window, URL, Event: FixtureEvent, MessageEvent: FixtureEvent, CloseEvent: FixtureEvent,
+  });
+  const socket = new window.WebSocket(`ws://fixture.local/ws/scenario/${scenario.id}`);
+  const eventTypes = [];
+  socket.onmessage = (event) => eventTypes.push(JSON.parse(event.data).type);
+  while (timers.length) timers.shift()();
+  assert.deepEqual(eventTypes, ["auth_ok"]);
+  new window.WebSocket("ws://fixture.local/ws/scenario/not-in-fixtures");
+  while (timers.length) timers.shift()();
+  assert.equal(window.__fixtureWsEscapes__.length, 1);
+});
 
 function buildHtml(entryPath, {
   cssPath = "/assets/index-a.css",

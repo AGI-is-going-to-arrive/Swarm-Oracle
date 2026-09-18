@@ -8,7 +8,7 @@
  *     the legacy kg:openNodeSheet CustomEvent bridge)
  */
 
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
@@ -91,8 +91,11 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: vi.fn(),
 }));
 
-vi.mock('../api/client', () => ({
+vi.mock('../api/client', async importOriginal => ({
+  ...await importOriginal<typeof import('../api/client')>(),
   buildSessionHeaders: () => ({}),
+  getScenario: async () => ({ conversation_llm_configured: true }),
+  getConversation: async (threadId: string) => ({ thread_id: threadId, scenario_id: 'scn-42', turns: [] }),
 }));
 
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
@@ -296,7 +299,31 @@ describe('KGExplorerView happy path', () => {
     expect(canvas).toHaveAttribute('tabindex', '0');
   });
 
-  it('node click opens NodeConversationSheet (FE-3-seq wire-up)', async () => {
+  it('offers a result backlink and clears a no-match search without losing the canvas', async () => {
+    renderAt('scn-42');
+    const canvas = await screen.findByTestId('kg-explorer-g6-canvas');
+    expect(screen.getByRole('link', { name: 'Back to Result' })).toHaveAttribute('href', '/result/scn-42');
+    const user = userEvent.setup();
+    await user.type(screen.getByTestId('kg-explorer-search'), 'unmatched-query');
+    expect(await screen.findByTestId('kg-explorer-no-matches')).toHaveTextContent('No nodes match');
+    await user.click(screen.getByRole('button', { name: 'Clear search and filters' }));
+    expect(screen.queryByTestId('kg-explorer-no-matches')).not.toBeInTheDocument();
+    expect(screen.getByTestId('kg-explorer-g6-canvas')).toBe(canvas);
+  });
+
+  it('uses leaf translations and literal unknown types without an i18n object diagnostic', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'graph', nodes: [
+      { id: 'cf', type: 'counterfactual', label: 'Counterfactual node', round: 1 },
+      { id: 'unknown', type: 'conversation', label: 'Unknown type', round: 1 },
+    ], edges: [] }) } as Response);
+    renderAt();
+    const filters = await screen.findByTestId('kg-explorer-filter-pills');
+    expect(filters).toHaveTextContent('Counterfactual');
+    expect(filters).toHaveTextContent('conversation');
+    expect(filters).not.toHaveTextContent('returned an object');
+  });
+
+  it('node click inspects details and an explicit Ask action replaces details with conversation', async () => {
     renderAt('scn-42');
     await waitFor(() => {
       expect(getKgGraphMockState().nodeClickHandlers.length).toBeGreaterThan(0);
@@ -312,8 +339,12 @@ describe('KGExplorerView happy path', () => {
     act(() => {
       getKgGraphMockState().nodeClickHandlers.at(-1)?.({ target: { id: 'n1', type: 'circle' } });
     });
+    expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+    fireEvent.click(screen.getByTestId('node-detail-ask'));
     const sheet = await screen.findByTestId('node-conversation-sheet');
     expect(sheet).toBeInTheDocument();
+    expect(screen.queryByTestId('node-detail-panel')).toBeNull();
     expect(await screen.findByTestId('node-context-banner')).toHaveTextContent('Knowledge graph analyst');
     expect(screen.getByTestId('conversation-quick-q-1')).toHaveTextContent('Which nodes are closest');
     expect(screen.getByTestId('conversation-quick-q-1')).toHaveTextContent('alpha event');
@@ -354,6 +385,7 @@ describe('KGExplorerView happy path', () => {
     act(() => {
       getKgGraphMockState().nodeClickHandlers.at(-1)?.({ target: { id: 'node-9', type: 'circle' } });
     });
+    await user.click(screen.getByTestId('node-detail-ask'));
 
     await user.type(await screen.findByTestId('node-conversation-input'), 'inspect node');
     await user.click(screen.getByTestId('node-conversation-send'));
@@ -398,11 +430,12 @@ describe('KGExplorerView happy path', () => {
       } as Response);
 
     renderWithNavigator('scn-a');
-    await waitFor(() => expect(getKgGraphMockState().nodeClickHandlers.length).toBeGreaterThan(0));
+    await waitFor(() => expect(getLatestGraphData()?.nodes?.map(node => node.id)).toEqual(['node-a']));
 
     act(() => {
       getKgGraphMockState().nodeClickHandlers.at(-1)?.({ target: { id: 'node-a', type: 'circle' } });
     });
+    await user.click(screen.getByTestId('node-detail-ask'));
     expect(await screen.findByTestId('node-conversation-sheet')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('kg-explorer-nav-next'));
@@ -475,11 +508,12 @@ describe('KGExplorerView happy path', () => {
   it('does not revive an open sheet after search hides and then reveals the source node', async () => {
     const user = userEvent.setup();
     renderAt('scn-42');
-    await waitFor(() => expect(getKgGraphMockState().nodeClickHandlers.length).toBeGreaterThan(0));
+    await waitFor(() => expect(getLatestGraphData()?.nodes?.map(node => node.id)).toEqual(['n1', 'n2']));
 
     act(() => {
       getKgGraphMockState().nodeClickHandlers.at(-1)?.({ target: { id: 'n1', type: 'circle' } });
     });
+    await user.click(screen.getByTestId('node-detail-ask'));
     expect(await screen.findByTestId('node-conversation-sheet')).toBeInTheDocument();
 
     const search = screen.getByTestId('kg-explorer-search') as HTMLInputElement;

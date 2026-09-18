@@ -1725,6 +1725,7 @@ class TestByokValidation:
         assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
 
     def test_report_generate_allows_local_base_url_without_key(self, client, monkeypatch):
+        monkeypatch.setattr(scenarios_api.settings, "LLM_REASONING_EFFORT", "low")
         monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
         engine = get_engine()
         scenario_id = _seed_scenario(engine, status=ScenarioStatus.DONE)
@@ -1760,6 +1761,7 @@ class TestByokValidation:
         assert response.status_code == 200
         assert "event: report_started" in body
         assert captured["overrides"] == {
+            "reasoning_effort": "low",
             "api_key": None,
             "base_url": "http://localhost:1234/v1",
             "model": "local-model",
@@ -1801,6 +1803,7 @@ class TestByokValidation:
         client,
         monkeypatch,
     ):
+        monkeypatch.setattr(scenarios_api.settings, "LLM_REASONING_EFFORT", "low")
         monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
         monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
         with Session(get_engine()) as session:
@@ -1870,6 +1873,7 @@ class TestByokValidation:
         assert response.status_code == 200
         assert "event: report_started" in body
         assert captured["overrides"] == {
+            "reasoning_effort": "low",
             "api_key": "sk-report-profile",
             "base_url": "https://api.openai.com/v1",
             "model": "report-profile-model",
@@ -2127,6 +2131,7 @@ class TestByokValidation:
         client,
         monkeypatch,
     ):
+        monkeypatch.setattr(scenarios_api.settings, "LLM_REASONING_EFFORT", "low")
         monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
         monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
         with Session(get_engine()) as session:
@@ -2210,6 +2215,7 @@ class TestByokValidation:
         assert "byok_invalid" not in body
         assert "Unauthorized" not in body
         assert captured["overrides"] == {
+            "reasoning_effort": "low",
             "api_key": "sk-local-report-profile",
             "base_url": "https://api.openai.com/v1",
             "model": "local-report-profile-model",
@@ -2283,6 +2289,8 @@ class TestByokValidation:
     ):
         import app.api.helpers as helpers_module
 
+        monkeypatch.setattr(helpers_module.settings, "LLM_REASONING_EFFORT", "low")
+
         with Session(get_engine()) as session:
             profile = ModelProfile(
                 user_id="runtime-owner",
@@ -2344,6 +2352,7 @@ class TestByokValidation:
         await helpers_module.run_sim_background(scenario_id)
 
         assert captured["llm_overrides"] == {
+            "reasoning_effort": "low",
             "api_key": "sk-runtime-profile",
             "base_url": "https://api.openai.com/v1",
             "model": "runtime-profile-model",
@@ -2357,6 +2366,7 @@ class TestByokValidation:
             "quota_user_id": "runtime-owner",
         }
         assert captured["scope"] == {
+            "reasoning_effort": "low",
             "purpose": "scenario_runtime",
             "quota_key": "user:runtime-owner",
             "requests_per_minute": 37,
@@ -5181,8 +5191,15 @@ class TestStoryEndpoint:
             "en": "Cash balance changed from 10 to 7.",
             "zh": "现金余额从 10 变为 7。",
         }
-        assert outcome["related_claim_ids"] == ["claim-budget"]
-        assert outcome["related_claim_count"] == 1
+        assert outcome["initial_value"] == "10"
+        assert outcome["final_value"] == "7"
+        assert outcome["net_delta"] == "-3"
+        assert outcome["source_action_ids"] == [seeded["action_id"]]
+        assert outcome["source_action_count"] == 1
+        assert outcome["source_rule_ids"] == ["spend_budget"]
+        # Strong quote provenance does not verify a variable/unit/final-value claim.
+        assert outcome["related_claim_ids"] == []
+        assert outcome["related_claim_count"] == 0
         assert outcome["related_claim_ids_truncated"] is False
         assert {
             "source_action_ids",

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { buildSessionHeaders } from '../api/client';
+import { buildSessionHeaders, getSessionToken } from '../api/client';
 import { parseSseFrame } from '../lib/parseSseFrame';
 import { loadLlmProviderPolicy, validateByok } from '../lib/llmProviderPolicy';
 import type { AgentConversationWSEvent } from '../types';
@@ -10,6 +10,7 @@ function parseConversationSseFrame(frame: string): AgentConversationWSEvent | nu
 }
 
 interface UseNodeConversationTransportOptions {
+  sessionToken?: string;
   scenarioId: string;
   identityId?: string | null;
   originNodeId?: string | null;
@@ -45,6 +46,7 @@ async function readConversationError(
 }
 
 export function useNodeConversationTransport({
+  sessionToken = getSessionToken(),
   scenarioId,
   identityId,
   originNodeId,
@@ -74,13 +76,38 @@ export function useNodeConversationTransport({
 
   useEffect(() => () => {
     abortActiveRequest();
-  }, [abortActiveRequest]);
+  }, [abortActiveRequest, sessionToken]);
 
   const streamTurn = useCallback(async (nextThreadId: string, text: string): Promise<boolean> => {
+    if (getSessionToken() !== sessionToken) return false;
     abortActiveRequest();
     const controller = new AbortController();
     activeRequestControllerRef.current = controller;
     let accepted = false;
+    let terminalReceived = false;
+    let activeTurnId: string | null = null;
+    const isCurrent = () => getSessionToken() === sessionToken
+      && !controller.signal.aborted && activeRequestControllerRef.current === controller;
+    const dispatchFrame = (frame: string) => {
+      if (!isCurrent() || terminalReceived) return;
+      const parsed = parseConversationSseFrame(frame);
+      if (!parsed) return;
+      if ('thread_id' in parsed && parsed.thread_id && parsed.thread_id !== nextThreadId) return;
+      if (parsed.type === 'turn_started') activeTurnId = parsed.turn_id;
+      if ('turn_id' in parsed && activeTurnId && parsed.turn_id !== activeTurnId) return;
+      if (parsed.type === 'turn_completed' || parsed.type === 'turn_aborted' || parsed.type === 'turn_error') {
+        // Server validation can terminate a reserved assistant before its first token/start frame.
+        if (!activeTurnId && typeof parsed.sequence === 'number') {
+          onWsEventRef.current({ type: 'turn_started', thread_id: nextThreadId, turn_id: parsed.turn_id, sequence: parsed.sequence });
+        } else if (!activeTurnId && parsed.type === 'turn_error') {
+          onTransportErrorRef.current(parsed.code, parsed.message);
+          terminalReceived = true;
+          return;
+        }
+        terminalReceived = true;
+      }
+      onWsEventRef.current(parsed);
+    };
     try {
       const providerPolicy = loadLlmProviderPolicy();
       const validation = validateByok({
@@ -96,7 +123,7 @@ export function useNodeConversationTransport({
         headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           user_content: text,
-          ...(originExcerpt ? { origin_excerpt: originExcerpt } : {}),
+          ...(originExcerpt ? { origin_excerpt: Array.from(originExcerpt).slice(0, 1000).join('') } : {}),
           ...(providerPolicy.apiKey ? { llm_api_key: providerPolicy.apiKey } : {}),
           ...(providerPolicy.baseUrl ? { llm_base_url: providerPolicy.baseUrl } : {}),
           ...(providerPolicy.model ? { llm_model: providerPolicy.model } : {}),
@@ -104,9 +131,10 @@ export function useNodeConversationTransport({
         }),
         signal: controller.signal,
       });
+      if (!isCurrent()) return false;
       if (!response.ok) {
         const error = await readConversationError(response);
-        onTransportErrorRef.current(error.code, error.message);
+        if (isCurrent()) onTransportErrorRef.current(error.code, error.message);
         return false;
       }
 
@@ -121,39 +149,39 @@ export function useNodeConversationTransport({
       let buffer = '';
       while (true) {
         const { done, value } = await reader.read();
+        if (!isCurrent()) return accepted;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const frames = buffer.split(/\r?\n\r?\n/);
         buffer = frames.pop() ?? '';
         for (const frame of frames) {
-          const parsed = parseConversationSseFrame(frame);
-          if (parsed) {
-            onWsEventRef.current(parsed);
-          }
+          dispatchFrame(frame);
         }
       }
-      const trailing = parseConversationSseFrame((buffer + decoder.decode()).trim());
-      if (trailing) {
-        onWsEventRef.current(trailing);
-      }
+      dispatchFrame((buffer + decoder.decode()).trim());
+      if (isCurrent() && !terminalReceived) onTransportErrorRef.current('SERVER_ERROR');
     } catch (error) {
-      if (controller.signal.aborted) return accepted;
+      if (!isCurrent()) return accepted;
       const message = error instanceof Error ? error.message : 'Stream failed';
       onTransportErrorRef.current('SERVER_ERROR', message);
       return accepted;
     } finally {
+      if (getSessionToken() !== sessionToken) controller.abort();
       if (activeRequestControllerRef.current === controller) {
         activeRequestControllerRef.current = null;
       }
     }
     return accepted;
-  }, [abortActiveRequest, originExcerpt]);
+  }, [abortActiveRequest, originExcerpt, sessionToken]);
 
   const startConversation = useCallback(async (text: string): Promise<boolean> => {
+    if (getSessionToken() !== sessionToken) return false;
     abortActiveRequest();
     const epoch = ++bootstrapEpochRef.current;
     const controller = new AbortController();
     activeRequestControllerRef.current = controller;
+    const isCurrent = () => getSessionToken() === sessionToken
+      && !controller.signal.aborted && bootstrapEpochRef.current === epoch;
     try {
       const providerPolicy = loadLlmProviderPolicy();
       const validation = validateByok({
@@ -174,7 +202,7 @@ export function useNodeConversationTransport({
           origin_round_number: originRoundNumber ?? null,
           origin_node_id: originNodeId ?? null,
           origin_node_type: originNodeType ?? null,
-          ...(originExcerpt ? { origin_excerpt: originExcerpt } : {}),
+          ...(originExcerpt ? { origin_excerpt: Array.from(originExcerpt).slice(0, 1000).join('') } : {}),
           first_user_content: text,
           ...(providerPolicy.apiKey ? { llm_api_key: providerPolicy.apiKey } : {}),
           ...(providerPolicy.baseUrl ? { llm_base_url: providerPolicy.baseUrl } : {}),
@@ -183,14 +211,14 @@ export function useNodeConversationTransport({
         }),
         signal: controller.signal,
       });
-      if (bootstrapEpochRef.current !== epoch) return false;
+      if (!isCurrent()) return false;
       if (!response.ok) {
         const error = await readConversationError(response);
-        onTransportErrorRef.current(error.code, error.message);
+        if (isCurrent()) onTransportErrorRef.current(error.code, error.message);
         return false;
       }
       const payload = await response.json() as { thread_id?: string | null };
-      if (bootstrapEpochRef.current !== epoch) return false;
+      if (!isCurrent()) return false;
       const nextThreadId = typeof payload.thread_id === 'string' && payload.thread_id.trim()
         ? payload.thread_id
         : null;
@@ -201,16 +229,17 @@ export function useNodeConversationTransport({
       setThreadIdRef.current(nextThreadId);
       return await streamTurn(nextThreadId, text);
     } catch (error) {
-      if (controller.signal.aborted) return false;
+      if (!isCurrent()) return false;
       const message = error instanceof Error ? error.message : 'Start conversation failed';
       onTransportErrorRef.current('SERVER_ERROR', message);
       return false;
     } finally {
+      if (getSessionToken() !== sessionToken) controller.abort();
       if (activeRequestControllerRef.current === controller) {
         activeRequestControllerRef.current = null;
       }
     }
-  }, [abortActiveRequest, identityId, originBranchId, originExcerpt, originNodeId, originNodeType, originRoundNumber, scenarioId, streamTurn]);
+  }, [abortActiveRequest, identityId, originBranchId, originExcerpt, originNodeId, originNodeType, originRoundNumber, scenarioId, streamTurn, sessionToken]);
 
   return {
     abortActiveRequest,

@@ -181,6 +181,10 @@
     },
     "app_title": "SwarmOracle",
     "home": {
+      "simulation_controls_title": "推演规模",
+      "simulation_controls_note": "轮数和 Agent 数量仅用于推演，不改变辩论竞技场的规模。",
+      "reasoning_default": "沿用服务端默认",
+      "launch_owner_changed": "当前会话已变化，请重新核对启动配置。",
       "launch_profile_refresh_failed": "模型配置刷新失败，请重试。",
       "launch_profile_refreshed": "模型配置已刷新，请重新核对启动摘要。",
       "launch_profile_refreshing": "正在刷新模型配置…",
@@ -666,6 +670,18 @@
       "step_deep_dive": "深入探索"
     },
     "result": {
+      "bridge_historical_report_title": "查看此前分析",
+      "bridge_historical_report_desc": "查看此前保存的分析，也可为当前状态重新生成。",
+      "bridge_brief_report_title": "先看简报",
+      "bridge_brief_report_desc": "先阅读已保存的依据，需要时再生成完整分析。",
+      "change_editor_title": "改写一轮并重演",
+      "change_editor_desc": "选择已有轮次，看看换一种决定会怎样。",
+      "change_requires_completed": "推演完成后即可尝试。",
+      "compare_existing_title": "比较已有分支",
+      "compare_existing_desc": "查看两条已有分支的差异。",
+      "task_verify": "核对依据",
+      "task_ask": "追问角色",
+      "task_change": "尝试改变",
       "simulation_weight_hint": "模拟路径的相对权重；现实预测与玩法积分另行记录。",
       "simulation_weight": "模拟权重",
       "evidence_unavailable": "此结果没有可用的已保存证据。",
@@ -929,7 +945,18 @@
         "readFullReport": "阅读完整报告",
         "readFullReportLead": "想看完整推理过程？",
         "takeawaysLabel": "关键要点",
-        "disclaimer_suppressed": "已隐藏统计区间：本次推演没有能直接回答问题的分支可作锚点。"
+        "disclaimer_suppressed": "已隐藏统计区间：本次推演没有能直接回答问题的分支可作锚点。",
+        "historyTitle": "上一版完整分析",
+        "historyReadOnly": "这份分析对应较早的推演状态，仅供回顾，不能替代当前报告。",
+        "returnCurrent": "返回当前报告",
+        "readPreviousFull": "阅读上一版完整分析",
+        "domainStateTitle": "核对已保存的模拟状态",
+        "historicalDomainState": "这份历史分析记录的模拟状态",
+        "domainStateUnverified": "这些值来自已保存的规则裁决。提出方案不等于执行，报告叙述与这些值的一致性尚未核实。",
+        "domainStateUnavailable": "这份报告没有可核验的领域状态，不能凭叙述认定政策已采纳或已执行。",
+        "domainStateRound": "已保存至第 {{round}} 轮",
+        "domainAdoptedDecision": "模拟中已采纳的决策",
+        "domainModeledState": "模型状态"
       },
       "title": "推演结果",
       "subtitle": "多结局对比",
@@ -1697,6 +1724,14 @@
       "submit_action_short": "注入这张卡"
     },
     "debate": {
+      "review_cost_unknown": "总费用与 Token 用量取决于所选模型、角色准备、总结、可选分析和重试。",
+      "start_failed": "辩论启动失败，可按已核对的配置重试。",
+      "review_title": "核对辩论启动",
+      "review_structure": "固定正反两方和一名裁决者。依次进行开场、交锋、反驳、结辩，再给出裁决。",
+      "review_extra_work": "角色准备、总结、已启用的解读或论证图分析，以及重试都可能增加模型请求，调用次数并非固定。",
+      "review_start": "启动这场辩论",
+      "review_starting": "正在启动辩论…",
+      "review_auto_agent": "为本场辩论生成角色",
       "stage_not_run": "未完成",
       "return_to_latest": "返回最后保存的发言",
       "provisional_score_notice": "当前显示的是过程分数，此运行没有最终裁决。",
@@ -2020,7 +2055,8 @@
       "anchor_kind_insight": "当前洞察",
       "anchor_kind_key_moment": "关键转折",
       "anchor_kind_quote": "引用句",
-      "anchor_kind_default": "锚点"
+      "anchor_kind_default": "锚点",
+      "provider_inherit": "沿用会客厅模型／服务端默认"
     },
     "roundtable": {
       "output_archived": "导入的已保存分析，原始来源链接不可用。",
@@ -2597,7 +2633,8 @@
       "bias_levels": {
         "high": "高",
         "low": "低"
-      }
+      },
+      "edit_agent_aria": "编辑 {{name}}"
     },
     "agent_workshop": {
       "bias_title": "决策偏好配置",
@@ -2652,7 +2689,7 @@
       "feature_disabled": "当前未启用 Agent 备份功能。",
       "export_not_found": "找不到该 Agent 备份。",
       "export_failed": "Agent 备份导出失败，请重试。",
-      "import_conflict": "该 Agent 备份已存在于你的账号中。",
+      "import_conflict": "该 Agent 备份已存在于你的账号中。请改用其他备份，或修改内容并重新验证后再导入。",
       "import_invalid": "Agent 备份未通过服务器校验。",
       "import_not_allowed": "当前未启用从备份创建 Agent。",
       "import_failed": "无法从备份创建 Agent，请重试。",
@@ -2696,7 +2733,7 @@
       "invalid_json": "该文件不包含有效的 JSON。",
       "invalid_utf8": "该文件不是有效的 UTF-8 文本。",
       "too_large": "Agent 包文件不得超过 256 KiB。",
-      "conflict": "该 Agent 包与你的资料库冲突，因此没有导入任何 Agent。",
+      "conflict": "该 Agent 包与你的资料库冲突，没有导入任何 Agent。请改用其他包，或修改内容并重新验证后再导入。",
       "unavailable": "导入服务暂时不可用，请稍后重试。",
       "server_invalid": "该 Agent 包未通过服务器校验，没有导入任何 Agent。",
       "failed": "Agent 包导入失败，没有导入任何 Agent，请重试。",
@@ -2970,7 +3007,8 @@
       "analysis_cross_branch": "跨分支连线",
       "analysis_avg_max_degree": "平均/最大度",
       "analysis_degree_distribution": "度分布",
-      "analysis_degree_n": "度 {{degree}}"
+      "analysis_degree_n": "度 {{degree}}",
+      "type_counterfactual": "反事实"
     },
     "action_ledger": {
       "reaction": "反应",
@@ -3002,10 +3040,17 @@
       "round": "第 {{round}} 轮",
       "target": "目标：{{target}}",
       "failure_code": "失败原因：{{code}}",
-      "type_post": "发帖", "type_comment": "评论", "type_reaction": "回应",
-      "type_follow": "关注", "type_mute": "屏蔽", "type_search": "搜索",
-      "type_trend": "查看趋势", "type_refresh": "刷新", "type_idle": "等待",
-      "status_verified": "已验证", "status_unavailable": "不可用",
+      "type_post": "发帖",
+      "type_comment": "评论",
+      "type_reaction": "回应",
+      "type_follow": "关注",
+      "type_mute": "屏蔽",
+      "type_search": "搜索",
+      "type_trend": "查看趋势",
+      "type_refresh": "刷新",
+      "type_idle": "等待",
+      "status_verified": "已验证",
+      "status_unavailable": "不可用",
       "status_failed": "失败",
       "observation_verified": "观察证据：{{count}} 条来源消息",
       "observation_empty": "本次行动未使用先前观察证据。",
@@ -3109,6 +3154,8 @@
       "refs_shown": "已显示 {{shown}}/共 {{total}}"
     },
     "compare": {
+      "branch_original_name": "{{branch}}（原分支）",
+      "branch_counterfactual_name": "{{branch}}（反事实分支）",
       "resimulate_requires_completed": "仅已完成的推演可启动此续跑。",
       "title": "分支对比",
       "missing_params": "缺少分支参数",
@@ -3116,8 +3163,8 @@
       "error_fetch": "当前无法加载对比数据，请稍后重试。",
       "round": "第 {{round}} 轮",
       "divergence_label": "分歧度",
-      "branch_a_label": "分支 A（原始）",
-      "branch_b_label": "分支 B（反事实）",
+      "branch_a_label": "分支 A",
+      "branch_b_label": "分支 B",
       "feature_disabled": "反事实重演功能未启用。",
       "latest_round": "最新回合",
       "context_aria": "对照上下文",
@@ -3253,7 +3300,7 @@
       }
     },
     "workbench": {
-      "resize_divider": "拖动调整面板大小",
+      "resize_divider": "调整面板宽度。使用左右方向键、Home 或 End，按 Enter 重置。",
       "title": "图谱工作台",
       "layout_graph": "因果",
       "layout_split": "分屏",
@@ -3264,7 +3311,8 @@
       "kg_panel": "知识图谱",
       "loading": "加载工作台...",
       "error": "加载工作台失败",
-      "unavailable": "工作台功能未启用"
+      "unavailable": "工作台功能未启用",
+      "resize_value": "因果图 {{left}}%，知识图谱 {{right}}%"
     },
     "kg_graph_board": {
       "mobile_truncate_notice": "正在显示 {{cap}} / {{total}} 个节点，可搜索或筛选聚焦。",
@@ -3299,7 +3347,10 @@
       "legend_desc_verdict": "最终的结论或决策",
       "legend_desc_outcome": "事件或行动的结果",
       "legend_interaction_hint": "点击任意节点查看完整内容，还可以和 Agent 对话。",
-      "filter_all_hidden": "所有节点被筛选隐藏了。点击上方的类型标签来显示。"
+      "filter_all_hidden": "所有节点被筛选隐藏了。点击上方的类型标签来显示。",
+      "no_filter_matches": "没有匹配这些筛选条件的节点。",
+      "clear_filters": "清除搜索和筛选",
+      "focused_labels_hint": "选择或聚焦节点以阅读标签。"
     },
     "agent_profile": {
       "dialog_label": "Agent 档案",
@@ -3423,7 +3474,8 @@
       "value_available": "可用",
       "value_unavailable": "不可用",
       "value_yes": "是",
-      "value_no": "否"
+      "value_no": "否",
+      "ask_about_node": "询问这个节点"
     },
     "pipeline": {
       "parsing": "解析中…",
@@ -3772,14 +3824,28 @@
       },
       "history": {
         "load_history": "加载历史对话",
-        "loading": "加载对话中...",
-        "load_failed": "加载对话失败。",
-        "retry": "重试",
+        "loading": "正在加载对话…",
+        "load_failed": "未能加载对话历史。",
+        "retry": "重试加载历史",
         "no_history": "暂无对话历史",
         "thread_count": "{{count}} 条消息",
         "select_thread": "选择要重新加载的对话",
         "load_more": "加载更多",
         "untitled_thread": "未命名对话"
+      },
+      "transcript": {
+        "user": "你",
+        "assistant": "助手",
+        "load_earlier": "加载更早的消息",
+        "aborted": "回答已停止",
+        "failed": "回答失败，问题已保留。"
+      },
+      "readiness": {
+        "checking": "正在检查模型配置…",
+        "configuration_required": "配置模型后即可发送。草稿与历史记录会保留。",
+        "unknown": "暂时无法确认模型是否可用。可以重新检查或尝试发送。",
+        "configure": "配置模型",
+        "retry": "重新检查"
       }
     },
     "source": {
@@ -3938,7 +4004,10 @@
       "col_label": "名称",
       "col_round": "回合",
       "related_incoming": "上游：{{source}}",
-      "related_outgoing": "下游：{{target}}"
+      "related_outgoing": "下游：{{target}}",
+      "no_filter_matches": "没有匹配这些筛选条件的节点。",
+      "clear_filters": "清除搜索和筛选",
+      "back_to_result": "返回结果"
     },
     "timeline_galaxy": {
       "node_unavailable": "此节点已不可用，请重新加载时间线。",

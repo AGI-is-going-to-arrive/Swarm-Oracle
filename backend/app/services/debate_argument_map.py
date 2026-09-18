@@ -27,6 +27,7 @@ from app.services.llm_client import (
     format_untrusted_text_block,
     llm_call_json_with_stream_fallback,
     llm_request_scope,
+    resolve_reasoning_effort,
 )
 from app.services.runtime_lock import RuntimeLockLease, begin_serialized_write
 
@@ -824,6 +825,7 @@ async def enrich_argument_units_for_turn(
     with llm_request_scope(
         quota_key=f"user:{quota_key}" if quota_key else None,
         purpose="debate_argument_map_enrichment",
+        reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
         requests_per_minute=overrides.get("requests_per_minute"),
         tokens_per_minute=overrides.get("tokens_per_minute"),
         concurrency=overrides.get("concurrency"),
@@ -839,7 +841,7 @@ async def enrich_argument_units_for_turn(
     ):
         result = await llm_call_json_with_stream_fallback(
             prompt,
-            reasoning_effort=overrides.get("reasoning_effort") or "low",
+            reasoning_effort=overrides.get("reasoning_effort"),
             model=overrides.get("model"),
             api_key=overrides.get("api_key"),
             base_url=overrides.get("base_url"),

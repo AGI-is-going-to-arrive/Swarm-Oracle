@@ -18,11 +18,12 @@ vi.mock('react-i18next', () => ({
 
 const mockExport = vi.fn();
 const mockImport = vi.fn();
+const mockIsApiError = vi.fn(() => false);
 
 vi.mock('../../api/client', () => ({
   exportPersona: (...args: unknown[]) => mockExport(...args),
   importPersona: (...args: unknown[]) => mockImport(...args),
-  isApiError: () => false,
+  isApiError: () => mockIsApiError(),
 }));
 
 let mockCapEnabled = true;
@@ -126,6 +127,7 @@ describe('PersonaExportImport — ExportButton', () => {
     mockCapEnabled = true;
     mockExport.mockReset();
     mockImport.mockReset();
+    mockIsApiError.mockReturnValue(false);
   });
   afterEach(() => { cleanup(); });
 
@@ -193,6 +195,7 @@ describe('PersonaExportImport — ImportDialog', () => {
     mockCapEnabled = true;
     mockExport.mockReset();
     mockImport.mockReset();
+    mockIsApiError.mockReturnValue(false);
   });
   afterEach(() => { cleanup(); });
 
@@ -284,6 +287,89 @@ describe('PersonaExportImport — ImportDialog', () => {
     expect(screen.queryByText(/raw database import failure/i)).not.toBeInTheDocument();
 
     debugSpy.mockRestore();
+  });
+
+  it('blocks a confirmed conflict despite formatting changes until different valid content is provided', async () => {
+    mockIsApiError.mockReturnValue(true);
+    mockImport.mockRejectedValueOnce({ status: 409, code: 'PERSONA_IMPORT_CONFLICT' });
+    mockImport.mockResolvedValueOnce({ success: true, identity_id: 'changed-agent' });
+    const onImported = vi.fn();
+    render(<ImportDialog open={true} onClose={vi.fn()} onImported={onImported} />);
+    const textarea = openPastePanel();
+    const submit = screen.getByRole('button', { name: /create as new agent/i });
+    fireEvent.change(textarea, { target: { value: JSON.stringify(validPayload) } });
+    fireEvent.click(submit);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Choose a different backup/i);
+    expect(submit).toBeDisabled();
+    fireEvent.submit(submit.closest('form')!);
+    expect(mockImport).toHaveBeenCalledTimes(1);
+
+    const equivalent = {
+      persona: { ...validPayload.persona, name: ' Aria ',
+        decision_bias: { optimism: -0.1, caution: 0.3 } },
+      exported_at: validPayload.exported_at, schema_version: 1,
+    };
+    fireEvent.change(textarea, { target: { value: JSON.stringify(equivalent, null, 2) } });
+    expect(submit).toBeDisabled();
+    fireEvent.submit(submit.closest('form')!);
+    expect(mockImport).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(textarea, { target: { value: '{"persona":' } });
+    expect(submit).toBeDisabled();
+    const changed = { ...validPayload, persona: { ...validPayload.persona, name: 'Changed agent' } };
+    fireEvent.change(textarea, { target: { value: JSON.stringify(changed) } });
+    expect(submit).toBeEnabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.change(textarea, { target: { value: JSON.stringify(validPayload) } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(textarea, { target: { value: JSON.stringify(changed) } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(onImported).toHaveBeenCalledWith('changed-agent'));
+    expect(mockImport).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not unblock a conflict by reselecting an identical file under another name', async () => {
+    mockIsApiError.mockReturnValue(true);
+    mockImport.mockRejectedValueOnce({ status: 409, code: 'PERSONA_IMPORT_CONFLICT' });
+    const view = render(<ImportDialog open={true} onClose={vi.fn()} onImported={vi.fn()} />);
+    fireEvent.change(openPastePanel(), { target: { value: JSON.stringify(validPayload) } });
+    const submit = screen.getByRole('button', { name: /create as new agent/i });
+    fireEvent.click(submit);
+    await screen.findByRole('alert');
+    const readText = vi.fn().mockResolvedValue(JSON.stringify(validPayload, null, 2));
+    const sameFile = new File([], 'different-filename.json', { type: 'application/json' });
+    Object.defineProperty(sameFile, 'text', { value: readText });
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, {
+      target: { files: [sameFile] },
+    });
+    await waitFor(() => expect(readText).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('persona-paste-textarea')).toHaveValue(
+      JSON.stringify(validPayload, null, 2),
+    ));
+    expect(submit).toBeDisabled();
+    fireEvent.submit(submit.closest('form')!);
+    expect(mockImport).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the same payload retryable after a network failure', async () => {
+    mockImport.mockRejectedValueOnce(new Error('offline'));
+    mockImport.mockResolvedValueOnce({ success: true, identity_id: 'retried-agent' });
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const onImported = vi.fn();
+    try {
+      render(<ImportDialog open={true} onClose={vi.fn()} onImported={onImported} />);
+      fireEvent.change(openPastePanel(), { target: { value: JSON.stringify(validPayload) } });
+      const submit = screen.getByRole('button', { name: /create as new agent/i });
+      fireEvent.click(submit);
+      expect(await screen.findByRole('alert')).toHaveTextContent(/Please try again/i);
+      expect(submit).toBeEnabled();
+      expect(mockImport).toHaveBeenCalledTimes(1);
+      fireEvent.click(submit);
+      await waitFor(() => expect(onImported).toHaveBeenCalledWith('retried-agent'));
+      expect(mockImport).toHaveBeenCalledTimes(2);
+    } finally {
+      debugSpy.mockRestore();
+    }
   });
 
   it('closes on Escape', () => {

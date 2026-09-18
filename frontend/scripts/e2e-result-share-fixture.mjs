@@ -410,7 +410,9 @@ async function runResultShareSurface({ mode, browserName, contextOptions, args }
       [...state.replayArtifactRequests],
     ));
 
+    await page.getByRole("radio", { name: /^(探索|Explore)$/i }).click();
     const shareButton = page.getByRole("button", { name: /生成文案|Generate Copy/i }).first();
+    await shareButton.waitFor({ state: "visible", timeout: 10000 });
     steps.push(createStep("share-button-visible", await shareButton.isVisible().catch(() => false)));
     steps.push(createStep("share-button-enabled", await shareButton.isEnabled().catch(() => false)));
     const replayArtifactResponsePromise = page.waitForResponse((response) => {

@@ -62,6 +62,30 @@ def report_result_fingerprint(session: Session, scenario_id: str) -> str:
         "web_context_json": web_context_json,
         "language": parsed.get("_language"), "result_quality": parsed.get("result_quality"),
     })
+    if "domain_world_v1" in parsed:
+        # Report consistency consumes the frozen schema and committed domain
+        # projections. Other runtime bookkeeping must not invalidate a report.
+        runtime = parsed.get("agent_runtime_v1")
+        runtime = runtime if isinstance(runtime, dict) else {}
+        branches = runtime.get("branches")
+        domain_rounds: dict[str, Any] = {}
+        for branch_id, branch in (branches.items() if isinstance(branches, dict) else ()):
+            rounds = branch.get("rounds") if isinstance(branch, dict) else None
+            if not isinstance(rounds, dict):
+                continue
+            domain_rounds[branch_id] = {
+                number: {
+                    key: value for key, value in payload.items()
+                    if key.startswith("domain_") or key == "semantic_state_hash"
+                }
+                for number, payload in rounds.items()
+                if isinstance(payload, dict)
+            }
+        add({
+            "domain_world_v1": parsed["domain_world_v1"],
+            "domain_runtime_version": runtime.get("version"),
+            "domain_rounds": domain_rounds,
+        })
     branch_ids = select(Branch.id).where(Branch.scenario_id == scenario_id)
     round_ids = select(Round.id).where(Round.branch_id.in_(branch_ids))
     for model, predicate in (

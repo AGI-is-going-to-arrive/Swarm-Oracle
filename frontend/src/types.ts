@@ -164,6 +164,8 @@ export interface Scenario {
   total_rounds?: number;
   mode?: 'raw' | 'blackboard' | null;
   visualization_enabled?: boolean;
+  /** Owned scenario binding readiness; null/missing means unknown, not disabled. */
+  conversation_llm_configured?: boolean | null;
   scene_theme?: string | null;
   web_search_context?: WebSearchContext | null;
   agents: AgentInfo[];
@@ -681,6 +683,8 @@ export interface StoryData {
   full_report?: FullReport | FullReportTruncatedMarker | null;
   /** Saved report is readable but not current authority; absent on older servers. */
   full_report_stale?: boolean;
+  /** One saved full analysis from an earlier scope; always read-only history. */
+  historical_full_report?: FullReport | FullReportTruncatedMarker | null;
   /** Stage 1 world outcomes (§8.2); never nested under full_report. */
   world_outcomes?: WorldOutcomesProjection | null;
 }
@@ -1242,6 +1246,26 @@ export interface InterviewStatus {
   message: string;
 }
 
+export interface ReportDomainStateValue {
+  variable_id: string;
+  label_en: string;
+  label_zh: string;
+  semantic_role: 'stock' | 'flow' | 'capacity' | 'threshold' | 'commitment_state';
+  unit: string;
+  value: string | boolean;
+}
+
+export interface ReportDomainConsistency {
+  status: 'unverified' | 'unavailable';
+  branch_id: string;
+  schema_hash: string | null;
+  as_of_round: number | null;
+  state_revision: string | null;
+  failure_code: string | null;
+  epistemic_scope: 'scenario_assumption';
+  values: ReportDomainStateValue[];
+}
+
 export interface FullReport {
   version: string;
   /** Missing on legacy full reports. */
@@ -1260,6 +1284,7 @@ export interface FullReport {
   status: ReportStatus;
   tier: ReportTier;
   verdict: ReportVerdict;
+  domain_consistency?: ReportDomainConsistency | null;
   // Optional for persisted pre-Claim snapshots; current /story responses include it.
   claims?: ReportClaim[];
   sections: ReportSection[];
@@ -1773,6 +1798,7 @@ export type AgentConversationWSEvent =
   | { type: 'turn_started'; thread_id: string; turn_id: string; sequence: number; request_id?: string; model?: string }
   | { type: 'turn_token_delta'; turn_id: string; delta: string; sequence?: number; model?: string }
   | { type: 'turn_completed'; turn_id: string; thread_id?: string; sequence: number; status: 'committed' | 'aborted'; model?: string }
+  | { type: 'turn_aborted'; turn_id: string; thread_id?: string; sequence: number; status: 'aborted'; code?: string; message?: string; model?: string }
   | { type: 'turn_error'; turn_id: string; thread_id?: string; sequence?: number; code: string; message?: string; status?: string; model?: string; request_id?: string };
 
 export type EndingRoomWSEvent =

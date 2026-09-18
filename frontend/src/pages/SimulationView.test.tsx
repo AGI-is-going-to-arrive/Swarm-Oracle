@@ -1240,6 +1240,89 @@ describe('SimulationView replay automation output', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it('keeps imported Theater context expandable without hiding replay controls or receipts', async () => {
+    const user = userEvent.setup();
+    mockStore.scenario = {
+      ...baseScenario,
+      snapshot_import: {
+        source_status: 'done', mode: 'read_only', worker_resumed: false,
+        resume_action: null, reason_code: 'READ_ONLY_SNAPSHOT',
+      },
+    };
+    const view = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes>
+      </MemoryRouter>,
+    );
+    const world = view.container.querySelector<HTMLDetailsElement>('[data-context="world"]')!;
+    const history = view.container.querySelector<HTMLDetailsElement>('[data-context="history"]')!;
+    expect(world.open).toBe(false);
+    expect(history.open).toBe(false);
+    expect(screen.getByTestId('simulation-snapshot-banner')).not.toBeVisible();
+    expect(await screen.findByTestId('timeline-compact')).toBeVisible();
+    const receipt = await screen.findByTestId('intervention-receipt-card-mock');
+    expect(receipt.closest('details')).toBeNull();
+    expect(interventionReceiptCardRenderMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      enabled: true, terminal: true,
+    }));
+
+    await user.click(world.querySelector('summary')!);
+    expect(world.open).toBe(true);
+    expect(within(world).getByRole('region', { name: 'domain_world.title' })).toBeVisible();
+    await user.click(history.querySelector('summary')!);
+    expect(screen.getByTestId('simulation-snapshot-banner')).toBeVisible();
+    expect(within(history).getByText('simulation.snapshot_read_only')).toBeVisible();
+    const panel = view.container.querySelector<HTMLElement>('[aria-label="simulation.saved_content_region"]')!;
+    panel.scrollIntoView = vi.fn();
+    await user.click(within(history).getByRole('button', { name: 'simulation.view_saved_content' }));
+    await waitFor(() => expect(panel).toHaveFocus());
+    expect(panel).not.toHaveClass('sim-content__panel--collapsed');
+    expect(mockStore.messages[0].message).toBe('稳定秩序。');
+  });
+
+  it.each(['cancelled', 'error'] as const)('does not fold %s recovery into imported-history details', async (status) => {
+    mockStore.status = status;
+    mockStore.isSimulationComplete = false;
+    mockStore.scenario = {
+      ...baseScenario, status,
+      snapshot_import: {
+        source_status: 'simulating', mode: 'read_only', worker_resumed: false,
+        resume_action: 'start_new_simulation', reason_code: 'SOURCE_EXECUTION_NOT_RESUMED',
+      },
+    };
+    const view = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes>
+      </MemoryRouter>,
+    );
+    const banner = screen.getByTestId(status === 'error'
+      ? 'simulation-stuck-banner-error' : 'simulation-cancelled-banner');
+    expect(banner).toBeVisible();
+    expect(banner).toHaveAttribute('role', status === 'error' ? 'alert' : 'status');
+    expect(banner.closest('details')).toBeNull();
+    expect(view.container.querySelector('[data-context="history"]')).toBeNull();
+    expect(await screen.findByTestId('intervention-receipt-card-mock')).toBeInTheDocument();
+  });
+
+  it('keeps world state and saved-history context expanded in the classic view', () => {
+    mockStore.viewMode = 'classic';
+    mockStore.scenario = {
+      ...baseScenario,
+      snapshot_import: {
+        source_status: 'done', mode: 'read_only', worker_resumed: false,
+        resume_action: null, reason_code: 'READ_ONLY_SNAPSHOT',
+      },
+    };
+    const view = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(view.container.querySelector('.sim-context-disclosure')).toBeNull();
+    expect(screen.getByTestId('simulation-snapshot-banner')).toBeVisible();
+    expect(screen.getByRole('region', { name: 'domain_world.title' })).toBeVisible();
+  });
+
   it('refreshes the source before preparing a new form and copies only question and scale', async () => {
     const user = userEvent.setup();
     mockStore.status = 'error';
@@ -2850,6 +2933,14 @@ describe('SimulationView replay automation output', () => {
     expect(css).toMatch(/\.sim-warmup-narrative\s*\{[\s\S]*?position:\s*relative;/);
     expect(css).toMatch(/\.sim-warmup-narrative\s*\{[\s\S]*?z-index:\s*3;/);
     expect(css).toMatch(/\.theater-curtain\s*\{[\s\S]*?z-index:\s*2;/);
+  });
+
+  it('keeps lazy game styles from taking ownership of the Theater page layout', () => {
+    const gameCss = readFileSync('src/game/game.css', 'utf8');
+    expect(gameCss).not.toMatch(/\.theater-panel(?:\s|__game-wrapper)/);
+    const pageCss = readFileSync('src/pages/SimulationView.css', 'utf8');
+    expect(pageCss).not.toContain('--theater-toolbar-safe-area');
+    expect(pageCss).toMatch(/\.simulation-view--theater\s*\{[^}]*overflow-y:\s*auto;/);
   });
 
   it('switches capture modes in the UI and unlocks modal mode when a modal opens', async () => {

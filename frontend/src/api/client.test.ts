@@ -30,6 +30,9 @@ import {
   getScenarioActions,
   getScenario,
   getSessionBoundUserId,
+  getSessionToken,
+  SESSION_TOKEN_CHANGED_EVENT,
+  setSessionToken,
   identityContinuityPreflight,
   importAgentPack,
   importLocalPackDemoSnapshot,
@@ -54,6 +57,24 @@ describe('api client request parsing', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('notifies same-tab session replacement and logout without exposing credentials', () => {
+    const observed: Event[] = [];
+    const onChange = (event: Event) => observed.push(event);
+    window.addEventListener(SESSION_TOKEN_CHANGED_EVENT, onChange);
+    try {
+      setSessionToken('first-session');
+      setSessionToken('first-session');
+      setSessionToken('rotated-session');
+      setSessionToken('');
+      expect(observed).toHaveLength(3);
+      expect(observed.every(event => !(event instanceof CustomEvent))).toBe(true);
+      expect(observed.every(event => event.type === SESSION_TOKEN_CHANGED_EVENT)).toBe(true);
+      expect(getSessionToken()).toBe('');
+    } finally {
+      window.removeEventListener(SESSION_TOKEN_CHANGED_EVENT, onChange);
+    }
   });
 
   it('loads roundtable model and saved outputs using encoded scene and room scope', async () => {

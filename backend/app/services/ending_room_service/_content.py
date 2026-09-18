@@ -33,6 +33,7 @@ from app.services.llm_client import (
     format_untrusted_text_block,
     llm_call,
     llm_request_scope,
+    resolve_reasoning_effort,
 )
 
 from ._utils import (
@@ -220,6 +221,7 @@ async def _enhance_roundtable_phase_insights(
             async with semaphore:
                 with llm_request_scope(
                     quota_key=None,
+                    reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
                     purpose=f"roundtable_phase_insight_{phase}_{index}",
                     requests_per_minute=overrides.get("requests_per_minute"),
                     tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -237,7 +239,7 @@ async def _enhance_roundtable_phase_insights(
                     raw_output = await asyncio.wait_for(
                         llm_call(
                             prompt,
-                            reasoning_effort="low",
+                            reasoning_effort=overrides.get("reasoning_effort"),
                             temperature=0.45,
                             timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
                             model=overrides.get("model"),
@@ -2045,7 +2047,7 @@ async def _oracle_plain_stream_generation_text(
     chunks: list[str] = []
     stream_iter = _pkg.llm_call_stream(
         prompt,
-        reasoning_effort="medium",
+        reasoning_effort=overrides.get("reasoning_effort"),
         temperature=0.82,
         timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
         model=overrides.get("model"),
@@ -2558,6 +2560,7 @@ async def _maybe_rewrite_oracle_copy(
     try:
         with llm_request_scope(
             quota_key=None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose=purpose,
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -2582,7 +2585,7 @@ async def _maybe_rewrite_oracle_copy(
                 result = await asyncio.wait_for(
                     legacy_call(
                         gen_prompt,
-                        reasoning_effort="medium",
+                        reasoning_effort=overrides.get("reasoning_effort"),
                         temperature=0.82,
                     ),
                     timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
@@ -2599,7 +2602,7 @@ async def _maybe_rewrite_oracle_copy(
                 result = await asyncio.wait_for(
                     _pkg.llm_call(
                         gen_prompt,
-                        reasoning_effort="medium",
+                        reasoning_effort=overrides.get("reasoning_effort"),
                         temperature=0.82,
                         model=overrides.get("model"),
                         api_key=overrides.get("api_key"),
@@ -2672,6 +2675,7 @@ async def _maybe_rewrite_oracle_copy(
     try:
         with llm_request_scope(
             quota_key=None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose=f"{purpose}:rewrite",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -2690,7 +2694,7 @@ async def _maybe_rewrite_oracle_copy(
             result = await asyncio.wait_for(
                 _pkg.llm_call_json(
                     rewrite_prompt,
-                    reasoning_effort="medium",
+                    reasoning_effort=overrides.get("reasoning_effort"),
                     temperature=0.78,
                     fallback_mode="agent_message",
                     model=overrides.get("model"),
@@ -2734,6 +2738,7 @@ async def _maybe_rewrite_oracle_copy(
     try:
         with llm_request_scope(
             quota_key=None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose=f"{purpose}:plain_text_retry",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -2752,7 +2757,7 @@ async def _maybe_rewrite_oracle_copy(
             plain_result = await asyncio.wait_for(
                 _pkg.llm_call(
                         plain_rewrite_prompt,
-                        reasoning_effort="low",
+                        reasoning_effort=overrides.get("reasoning_effort"),
                         temperature=0.65,
                         model=overrides.get("model"),
                         api_key=overrides.get("api_key"),
@@ -2781,100 +2786,24 @@ async def _maybe_rewrite_oracle_copy(
             },
         )
     except Exception as plain_exc:
-        _effort_err = str(plain_exc).lower()
-        _is_effort_unsupported = (
-            "reasoning_effort" in _effort_err
-            or ("reasoning" in _effort_err and "400" in str(plain_exc))
-            or "unsupported parameter" in _effort_err
+        logger.warning(
+            "Oracle Chambers LLM all tiers failed for %s: plain=%s",
+            purpose,
+            plain_exc,
         )
-        if _is_effort_unsupported:
-            try:
-                with llm_request_scope(
-                    quota_key=None,
-                    purpose=f"{purpose}:no_effort_retry",
-                    requests_per_minute=overrides.get("requests_per_minute"),
-                    tokens_per_minute=overrides.get("tokens_per_minute"),
-                    concurrency=overrides.get("concurrency"),
-                    supports_structured_outputs_override=overrides.get(
-                        "supports_structured_outputs_override"
-                    ),
-                    supports_native_search_override=overrides.get(
-                        "supports_native_search_override"
-                    ),
-                    native_search_upstream_override=overrides.get(
-                        "native_search_upstream_override"
-                    ),
-                ):
-                    import app.services.ending_room_service as _pkg_r
-                    no_effort_result = await asyncio.wait_for(
-                        _pkg_r.llm_call(
-                            plain_rewrite_prompt,
-                            reasoning_effort=None,
-                            temperature=0.65,
-                            model=overrides.get("model"),
-                            api_key=overrides.get("api_key"),
-                            base_url=overrides.get("base_url"),
-                        ),
-                        timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
-                    )
-                polished = _strip_oracle_scope_boilerplate(
-                    str(no_effort_result or ""),
-                    language=room.language,
-                )
-                content = _normalize_oracle_generated_content(
-                    polished, fallback="",
-                )
-                if content:
-                    return content
-                logger.info(
-                    "Oracle no-effort rewrite returned empty content",
-                    extra={
-                        "event": "oracle_no_effort_retry_failed",
-                        "room_id": room.id,
-                        "room_type": room.room_type.value,
-                        "turn_phase": phase.value,
-                        "purpose": purpose,
-                        "reason": "empty_content",
-                    },
-                )
-            except Exception as no_effort_exc:
-                logger.warning(
-                    "Oracle LLM no-effort fallback for %s: %s",
-                    purpose,
-                    no_effort_exc,
-                )
-                _log_oracle_anchor_fallback(
-                    room=room,
-                    phase=phase,
-                    anchor_copy=anchor_copy,
-                    purpose=purpose,
-                    reason=_oracle_failure_reason(no_effort_exc),
-                )
-                if fail_closed:
-                    raise LLMError(
-                        "Oracle Chambers generation failed before producing usable content",
-                        code="LLM_FAILED",
-                    ) from no_effort_exc
-                return anchor_copy
-        else:
-            logger.warning(
-                "Oracle Chambers LLM all tiers failed for %s: plain=%s",
-                purpose,
-                plain_exc,
-            )
-            _log_oracle_anchor_fallback(
-                room=room,
-                phase=phase,
-                anchor_copy=anchor_copy,
-                purpose=purpose,
-                reason=_oracle_failure_reason(plain_exc),
-            )
-            if fail_closed:
-                raise LLMError(
-                    "Oracle Chambers generation failed before producing usable content",
-                    code="LLM_FAILED",
-                ) from plain_exc
-            return anchor_copy
+        _log_oracle_anchor_fallback(
+            room=room,
+            phase=phase,
+            anchor_copy=anchor_copy,
+            purpose=purpose,
+            reason=_oracle_failure_reason(plain_exc),
+        )
+        if fail_closed:
+            raise LLMError(
+                "Oracle Chambers generation failed before producing usable content",
+                code="LLM_FAILED",
+            ) from plain_exc
+        return anchor_copy
     _log_oracle_anchor_fallback(
         room=room,
         phase=phase,
@@ -2901,6 +2830,7 @@ async def _oracle_followup_streaming_supported(
         import app.services.ending_room_service as _pkg
         with llm_request_scope(
             quota_key=None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose="oracle_followup_stream_probe",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -2970,6 +2900,7 @@ async def _stream_oracle_copy(
     try:
         with llm_request_scope(
             quota_key=None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose=purpose,
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -2987,7 +2918,7 @@ async def _stream_oracle_copy(
             import app.services.ending_room_service as _pkg
             stream_iter = _pkg.llm_call_stream(
                 prompt,
-                reasoning_effort="medium",
+                reasoning_effort=overrides.get("reasoning_effort"),
                 temperature=0.75,
                 timeout=_ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS,
                 model=overrides.get("model"),

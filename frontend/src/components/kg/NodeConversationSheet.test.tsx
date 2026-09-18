@@ -12,20 +12,25 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ConversationDetail } from '../../api/client';
+import { setSessionToken, type ConversationDetail } from '../../api/client';
+
+const apiState = vi.hoisted(() => ({
+  getScenario: vi.fn(),
+  getConversation: vi.fn(),
+  capabilities: { loading: false, enabled: true, capabilities: { agent_conversation: { enabled: true }, llm_configured: true } as Record<string, unknown>, error: null as Error | null, reload: vi.fn() },
+}));
+vi.mock('../../api/client', async importOriginal => ({
+  ...await importOriginal<typeof import('../../api/client')>(),
+  getScenario: apiState.getScenario,
+  getConversation: apiState.getConversation,
+}));
 
 const streamingAriaLiveMockState = vi.hoisted(() => ({
   useStreamingAriaLiveMock: vi.fn(),
   realUseStreamingAriaLive: null as null | ((...args: unknown[]) => unknown),
 }));
 vi.mock('../../hooks/useCapabilityCheck', () => ({
-  useCapabilityCheck: () => ({
-    loading: false,
-    enabled: true,
-    capabilities: { agent_conversation: { enabled: true } },
-    error: null,
-    reload: vi.fn(),
-  }),
+  useCapabilityCheck: () => apiState.capabilities,
 }));
 
 const historyPickerMockState = vi.hoisted(() => ({
@@ -100,6 +105,9 @@ class NoopWS {
 }
 
 beforeEach(() => {
+  apiState.getScenario.mockReset().mockResolvedValue({ conversation_llm_configured: true });
+  apiState.getConversation.mockReset().mockImplementation(async (threadId: string) => ({ thread_id: threadId, scenario_id: 'scen-1', turns: [] }));
+  apiState.capabilities = { loading: false, enabled: true, capabilities: { agent_conversation: { enabled: true }, llm_configured: true }, error: null, reload: vi.fn() };
   vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
   vi.useFakeTimers();
   // Default: desktop viewport.
@@ -202,6 +210,171 @@ function makeSseResponse(frames: string[]) {
     },
   } as unknown as Response;
 }
+
+describe('NodeConversationSheet — session owner isolation', () => {
+  const token = (subject: string) => `v1.${btoa(JSON.stringify({ sub: subject }))}.test-signature`;
+
+  it.each([false, true])('rejects deferred owner A history after B replaces the session (notified=%s)', async (notified) => {
+    vi.useRealTimers();
+    setSessionToken(token('owner-a'));
+    let resolveHistory!: (detail: ConversationDetail) => void;
+    const pendingHistory = new Promise<ConversationDetail>(resolve => { resolveHistory = resolve; });
+    apiState.getConversation.mockReturnValueOnce(pendingHistory);
+    const view = renderSheet();
+    await waitFor(() => expect(apiState.getConversation).toHaveBeenCalled());
+
+    await act(async () => {
+      if (notified) setSessionToken(token('owner-b'));
+      else localStorage.setItem('swarmoracle_session_token', token('owner-b'));
+      resolveHistory(makeConversationDetail({
+        thread_id: 'thread-1', owner_user_id: 'owner-a',
+        turns: [{ id: 'private-answer', thread_id: 'thread-1', role: 'assistant', sequence: 2,
+          status: 'done', content: 'OWNER_A_PRIVATE_HISTORY', created_at: '2026-09-18T00:00:00Z',
+          updated_at: '2026-09-18T00:00:00Z' }],
+      }));
+      await pendingHistory;
+    });
+
+    expect(view.getByTestId('node-conversation-transcript')).not.toHaveTextContent('OWNER_A_PRIVATE_HISTORY');
+  });
+
+  it.each(['rotation', 'logout', 'storage'] as const)('clears already rendered history on session %s', async (change) => {
+    vi.useRealTimers();
+    setSessionToken(token('owner-a'));
+    apiState.getConversation.mockResolvedValueOnce(makeConversationDetail({
+      thread_id: 'thread-1', owner_user_id: 'owner-a',
+    }));
+    const view = renderSheet();
+    await waitFor(() => expect(view.getByTestId('node-conversation-transcript')).toHaveTextContent('Restored answer'));
+    await act(async () => {
+      if (change === 'rotation') setSessionToken(`${token('owner-a')}-rotated`);
+      else if (change === 'logout') setSessionToken('');
+      else {
+        localStorage.setItem('swarmoracle_session_token', token('owner-b'));
+        window.dispatchEvent(new StorageEvent('storage', { key: 'swarmoracle_session_token' }));
+      }
+    });
+    expect(view.getByTestId('node-conversation-transcript')).not.toHaveTextContent('Restored answer');
+  });
+
+  it('rejects a history picker detail belonging to the previous owner', async () => {
+    vi.useRealTimers();
+    setSessionToken(token('owner-b'));
+    historyPickerMockState.detail = makeConversationDetail({ owner_user_id: 'owner-a' });
+    const view = renderSheet({ threadId: null });
+    fireEvent.click(view.getByTestId('mock-conversation-history-select'));
+    expect(view.getByTestId('node-conversation-meta')).not.toHaveTextContent('history-thread');
+    expect(view.getByTestId('node-conversation-transcript')).not.toHaveTextContent('Restored answer');
+  });
+
+  it('keeps ownerless local history readable without an authenticated subject', async () => {
+    vi.useRealTimers();
+    apiState.getConversation.mockResolvedValueOnce(makeConversationDetail({
+      thread_id: 'thread-1', owner_user_id: '',
+    }));
+    const view = renderSheet();
+    await waitFor(() => expect(view.getByTestId('node-conversation-transcript')).toHaveTextContent('Restored answer'));
+  });
+
+  it('does not accept owner A readiness after B starts its own readiness check', async () => {
+    vi.useRealTimers();
+    setSessionToken(token('owner-a'));
+    let resolveReadiness!: (value: { conversation_llm_configured: boolean }) => void;
+    apiState.getScenario.mockImplementationOnce(() => new Promise(resolve => { resolveReadiness = resolve; }))
+      .mockResolvedValue({ conversation_llm_configured: false });
+    const view = renderSheet({ threadId: null });
+    await waitFor(() => expect(apiState.getScenario).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      setSessionToken(token('owner-b'));
+      resolveReadiness({ conversation_llm_configured: true });
+    });
+    fireEvent.change(view.getByTestId('node-conversation-input'), { target: { value: 'B question' } });
+    await waitFor(() => expect(view.getByTestId('conversation-model-readiness')).toHaveTextContent('conversation.readiness.configuration_required'));
+    expect(view.getByTestId('node-conversation-send')).toBeDisabled();
+  });
+
+  it('drops and aborts owner A late stream chunks when B replaces the session', async () => {
+    vi.useRealTimers();
+    setSessionToken(token('owner-a'));
+    const encoder = new TextEncoder();
+    let resolveChunk!: (chunk: { done: boolean; value?: Uint8Array }) => void;
+    let signal: AbortSignal | null | undefined;
+    let reads = 0;
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
+      signal = init?.signal;
+      return Promise.resolve({ ok: true, body: { getReader: () => ({
+        read: () => {
+          reads += 1;
+          if (reads === 1) return Promise.resolve({ done: false, value: encoder.encode(
+            'event: turn_started\ndata: {"thread_id":"thread-1","turn_id":"a-turn","sequence":2}\n\nevent: turn_token_delta\ndata: {"turn_id":"a-turn","delta":"OWNER_A_PREFIX"}\n\n',
+          ) });
+          if (reads === 2) return new Promise(resolve => { resolveChunk = resolve; });
+          return Promise.resolve({ done: true });
+        },
+        cancel: vi.fn(),
+      }) } } as unknown as Response);
+    }));
+    const view = renderSheet();
+    fireEvent.change(view.getByTestId('node-conversation-input'), { target: { value: 'OWNER_A_QUESTION' } });
+    fireEvent.click(view.getByTestId('node-conversation-send'));
+    await waitFor(() => expect(view.getByTestId('node-conversation-streaming')).toHaveTextContent('OWNER_A_PREFIX'));
+    await act(async () => {
+      setSessionToken(token('owner-b'));
+      resolveChunk({ done: false, value: encoder.encode(
+        'event: turn_token_delta\ndata: {"turn_id":"a-turn","delta":"OWNER_A_LATE_SECRET"}\n\nevent: turn_completed\ndata: {"turn_id":"a-turn","status":"committed"}\n\n',
+      ) });
+    });
+    expect(signal?.aborted).toBe(true);
+    expect(view.getByTestId('node-conversation-transcript')).not.toHaveTextContent('OWNER_A_');
+    expect(view.getByTestId('node-conversation-input')).toHaveValue('');
+  });
+
+  it('does not bootstrap an owner A thread under B after the delayed start returns', async () => {
+    vi.useRealTimers();
+    setSessionToken(token('owner-a'));
+    let resolveStart!: (response: Response) => void;
+    const fetchMock = vi.fn(() => new Promise<Response>(resolve => { resolveStart = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+    const view = renderSheet({ threadId: null });
+    fireEvent.change(view.getByTestId('node-conversation-input'), { target: { value: 'A bootstrap' } });
+    fireEvent.click(view.getByTestId('node-conversation-send'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      setSessionToken(token('owner-b'));
+      resolveStart({ ok: true, json: async () => ({ thread_id: 'owner-a-thread' }) } as Response);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(view.getByTestId('node-conversation-meta')).not.toHaveTextContent('owner-a-thread');
+  });
+
+  it('isolates no-origin drafts between owners without a scenario change', async () => {
+    setSessionToken(token('owner-a'));
+    const view = renderSheet({ threadId: null, identityId: null });
+    fireEvent.change(view.getByTestId('node-conversation-input'), { target: { value: 'OWNER_A_DRAFT' } });
+    await act(async () => { vi.advanceTimersByTime(600); });
+    const storedDrafts = Array.from({ length: window.sessionStorage.length }, (_, index) =>
+      window.sessionStorage.getItem(window.sessionStorage.key(index) ?? ''));
+    expect(storedDrafts).toContain('OWNER_A_DRAFT');
+    await act(async () => { setSessionToken(token('owner-b')); });
+    expect(view.getByTestId('node-conversation-input')).toHaveValue('');
+    expect(window.sessionStorage.getItem('swarmoracle_draft:result')).toBeNull();
+  });
+
+  it('isolates public no-origin drafts by scenario', async () => {
+    const view = renderSheet({ threadId: null, identityId: null });
+    fireEvent.change(view.getByTestId('node-conversation-input'), { target: { value: 'FIRST_SCENARIO_DRAFT' } });
+    await act(async () => { vi.advanceTimersByTime(600); });
+    view.rerender(<NodeConversationSheet open onOpenChange={() => {}} scenarioId="scen-2" threadId={null} />);
+    expect(view.getByTestId('node-conversation-input')).toHaveValue('');
+    expect(window.sessionStorage.getItem('swarmoracle_draft:result')).toBeNull();
+  });
+
+  it('does not adopt an old draft that has no owner namespace', () => {
+    window.sessionStorage.setItem('swarmoracle_draft:result', 'LEGACY_UNSCOPED_PRIVATE_DRAFT');
+    const view = renderSheet({ threadId: null, identityId: null });
+    expect(view.getByTestId('node-conversation-input')).toHaveValue('');
+  });
+});
 
 describe('NodeConversationSheet — responsive', () => {
   it('desktop default: data-mobile=false', () => {
@@ -329,7 +502,7 @@ describe('NodeConversationSheet — input + send', () => {
         expect.objectContaining({ method: 'POST' }),
       );
       expect(getByTestId('node-conversation-meta').textContent).toContain('thread=thread-created');
-      expect(getByTestId('node-conversation-streaming').textContent).toBe('hello node');
+      expect(getByTestId('node-conversation-transcript').textContent).toContain('hello node');
     });
   });
 
@@ -353,7 +526,7 @@ describe('NodeConversationSheet — input + send', () => {
       fireEvent.change(ta, { target: { value: 'retry me' } });
     });
     await waitFor(() => {
-      expect(window.sessionStorage.getItem('swarmoracle_draft:result')).toBe('retry me');
+      expect(window.sessionStorage.getItem('swarmoracle_draft:public:default_user:scen-1:result')).toBe('retry me');
     });
     fireEvent.click(getByTestId('node-conversation-send'));
 
@@ -365,7 +538,7 @@ describe('NodeConversationSheet — input + send', () => {
     });
 
     expect(ta.value).toBe('retry me');
-    expect(window.sessionStorage.getItem('swarmoracle_draft:result')).toBe('retry me');
+    expect(window.sessionStorage.getItem('swarmoracle_draft:public:default_user:scen-1:result')).toBe('retry me');
   });
 
   it('follow-up submit streams /turn SSE events into the bubble', async () => {
@@ -392,7 +565,7 @@ describe('NodeConversationSheet — input + send', () => {
         '/api/conversation/thread-1/turn',
         expect.objectContaining({ method: 'POST' }),
       );
-      expect(getByTestId('node-conversation-streaming').textContent).toBe('hello world');
+      expect(getByTestId('node-conversation-transcript').textContent).toContain('hello world');
       expect(getByTestId('node-conversation-cta-continue')).not.toBeNull();
     });
   });
@@ -417,7 +590,7 @@ describe('NodeConversationSheet — input + send', () => {
     fireEvent.click(getByTestId('node-conversation-send'));
 
     await waitFor(() => {
-      const bubble = getByTestId('node-conversation-streaming');
+      const bubble = getByTestId('node-conversation-transcript');
       expect(bubble.querySelector('strong')?.textContent).toBe('一、重点');
       expect(bubble.querySelector('li')?.textContent).toBe('第一条');
       expect(bubble.textContent).not.toContain('**');
@@ -495,7 +668,7 @@ describe('NodeConversationSheet — input + send', () => {
         '/api/conversation/thread-1/turn',
         expect.objectContaining({ method: 'POST' }),
       );
-      expect(getByTestId('node-conversation-streaming').textContent).toBe('hello world');
+      expect(getByTestId('node-conversation-transcript').textContent).toContain('hello world');
       expect(getByTestId('node-conversation-cta-continue')).not.toBeNull();
     });
   });
@@ -672,7 +845,7 @@ describe('NodeConversationSheet — a11y', () => {
         identityId="id-1"
       />,
     );
-    expect(live.textContent).toBe('old transcript');
+    expect(live.textContent).toBe('');
 
     rerender(
       <NodeConversationSheet
@@ -1009,7 +1182,7 @@ describe('NodeConversationSheet — T0 bootstrap abort', () => {
     expect(getByTestId('node-conversation-meta').textContent).not.toContain('thread-stale');
   });
 
-  it('send button is disabled during bootstrap pending', async () => {
+  it('offers Stop instead of a second Send during bootstrap pending', async () => {
     vi.useRealTimers();
     const fetchMock = vi.fn(() => {
       return new Promise<Response>(() => {});
@@ -1027,8 +1200,7 @@ describe('NodeConversationSheet — T0 bootstrap abort', () => {
     fireEvent.click(sendBefore);
 
     await waitFor(() => {
-      const sendDuring = getByTestId('node-conversation-send') as HTMLButtonElement;
-      expect(sendDuring.disabled).toBe(true);
+      expect(getByTestId('node-conversation-stop')).toBeEnabled();
     });
   });
 });
@@ -1046,7 +1218,7 @@ describe('NodeConversationSheet — T0 draft key isolation', () => {
       fireEvent.change(ta, { target: { value: 'draft for A' } });
     });
     await waitFor(() => {
-      expect(window.sessionStorage.getItem('swarmoracle_draft:scen-1:node-a:b1:2')).toBe('draft for A');
+      expect(window.sessionStorage.getItem('swarmoracle_draft:public:default_user:scen-1:node-a:b1:2')).toBe('draft for A');
     });
     unmount();
 
@@ -1058,13 +1230,13 @@ describe('NodeConversationSheet — T0 draft key isolation', () => {
       fireEvent.change(ta2, { target: { value: 'draft for B' } });
     });
     await waitFor(() => {
-      expect(window.sessionStorage.getItem('swarmoracle_draft:scen-1:node-b:b2:5')).toBe('draft for B');
+      expect(window.sessionStorage.getItem('swarmoracle_draft:public:default_user:scen-1:node-b:b2:5')).toBe('draft for B');
     });
 
-    expect(window.sessionStorage.getItem('swarmoracle_draft:scen-1:node-a:b1:2')).toBe('draft for A');
+    expect(window.sessionStorage.getItem('swarmoracle_draft:public:default_user:scen-1:node-a:b1:2')).toBe('draft for A');
   });
 
-  it('no-origin sheets use result scope draft key', async () => {
+  it('no-origin sheets use owner and scenario scoped result draft keys', async () => {
     vi.useRealTimers();
     const { getByTestId } = renderSheet({ threadId: null });
     const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
@@ -1072,7 +1244,7 @@ describe('NodeConversationSheet — T0 draft key isolation', () => {
       fireEvent.change(ta, { target: { value: 'result draft' } });
     });
     await waitFor(() => {
-      expect(window.sessionStorage.getItem('swarmoracle_draft:result')).toBe('result draft');
+      expect(window.sessionStorage.getItem('swarmoracle_draft:public:default_user:scen-1:result')).toBe('result draft');
     });
   });
 });
@@ -1168,4 +1340,171 @@ describe('NodeConversationSheet — T1 banner integration', () => {
     expect(body.origin_round_number).toBe(3);
     expect(body.origin_excerpt).toBe('Prompt-visible node excerpt');
   });
+});
+
+describe('NodeConversationSheet — complete transcript and readiness', () => {
+  it('keeps a newer composer draft when the previous streamed request finishes', async () => {
+    vi.useRealTimers();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const encode = (text: string) => ({ done: false, value: new TextEncoder().encode(text) });
+    const read = vi.fn()
+      .mockResolvedValueOnce(encode('event: turn_started\ndata: {"thread_id":"thread-1","turn_id":"answer","sequence":2}\n\n'))
+      .mockImplementationOnce(async () => {
+        await gate;
+        return encode('event: turn_token_delta\ndata: {"turn_id":"answer","delta":"Finished answer"}\n\nevent: turn_completed\ndata: {"turn_id":"answer","sequence":2,"status":"committed"}\n\n');
+      })
+      .mockResolvedValueOnce({ done: true });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, body: { getReader: () => ({ read }) } });
+    vi.stubGlobal('fetch', fetchMock);
+    const view = renderSheet();
+    const input = view.getByTestId('node-conversation-input');
+    fireEvent.change(input, { target: { value: 'Current question' } });
+    fireEvent.click(view.getByTestId('node-conversation-send'));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    fireEvent.change(input, { target: { value: 'Next question draft' } });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    finish();
+    await waitFor(() => expect(view.getByTestId('node-conversation-transcript')).toHaveTextContent('Finished answer'));
+    expect(input).toHaveValue('Next question draft');
+  });
+
+  it('ignores an older history response after selecting a different thread', async () => {
+    vi.useRealTimers();
+    let resolveOld!: (detail: ConversationDetail) => void;
+    apiState.getConversation.mockImplementationOnce(() => new Promise<ConversationDetail>(resolve => { resolveOld = resolve; }));
+    historyPickerMockState.detail = makeConversationDetail();
+    const view = renderSheet();
+    fireEvent.click(view.getByTestId('mock-conversation-history-select'));
+    await act(async () => { resolveOld(makeConversationDetail({ thread_id: 'thread-1', turns: [{ ...makeConversationDetail().turns[1], content: 'Stale old answer' }] })); });
+    expect(view.getByTestId('node-conversation-transcript')).toHaveTextContent('Restored answer');
+    expect(view.getByTestId('node-conversation-transcript')).not.toHaveTextContent('Stale old answer');
+  });
+
+  it('keeps partial content on an authoritative turn_aborted SSE and ignores later chunks', async () => {
+    vi.useRealTimers();
+    apiState.getConversation.mockResolvedValue({ thread_id: 'thread-1', scenario_id: 'scen-1', turns: [{ id: 'stopped', role: 'assistant', sequence: 2, content: '', status: 'aborted' }] });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeSseResponse([
+      'event: turn_started\ndata: {"thread_id":"thread-1","turn_id":"stopped","sequence":2}\n\n',
+      'event: turn_token_delta\ndata: {"turn_id":"stopped","delta":"Partial answer"}\n\n',
+      'event: turn_aborted\ndata: {"thread_id":"thread-1","turn_id":"stopped","sequence":2,"status":"aborted"}\n\n',
+      'event: turn_token_delta\ndata: {"turn_id":"stopped","delta":"Late text"}\n\n',
+    ])));
+    const view = renderSheet();
+    fireEvent.change(view.getByTestId('node-conversation-input'), { target: { value: 'Question' } });
+    fireEvent.click(view.getByTestId('node-conversation-send'));
+    await waitFor(() => expect(view.getByTestId('node-conversation-transcript')).toHaveTextContent('conversation.transcript.aborted'));
+    const transcript = view.getByTestId('node-conversation-transcript');
+    expect(transcript).toHaveTextContent('Partial answer');
+    expect(transcript).not.toHaveTextContent('Late text');
+    expect(transcript.querySelector('[data-turn-status="aborted"]')).not.toBeNull();
+    expect(view.queryByTestId('conversation-recovery-banner')).not.toBeInTheDocument();
+  });
+  it('keeps both questions and both answers after consecutive streamed turns', async () => {
+    vi.useRealTimers();
+    let sequence = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      sequence += 2;
+      const id = `answer-${sequence}`;
+      return makeSseResponse([
+        `event: turn_started\ndata: ${JSON.stringify({ thread_id: 'thread-1', turn_id: id, sequence })}\n\n`,
+        `event: turn_token_delta\ndata: ${JSON.stringify({ turn_id: id, delta: `Answer ${sequence}` })}\n\n`,
+        `event: turn_completed\ndata: ${JSON.stringify({ turn_id: id, sequence, status: 'committed' })}\n\n`,
+      ]);
+    }));
+    const view = renderSheet();
+    const input = view.getByTestId('node-conversation-input');
+    fireEvent.change(input, { target: { value: 'First question' } });
+    fireEvent.click(view.getByTestId('node-conversation-send'));
+    await waitFor(() => expect(view.getByTestId('node-conversation-transcript')).toHaveTextContent('Answer 2'));
+    await waitFor(() => expect(input).toHaveValue(''));
+    fireEvent.change(input, { target: { value: 'Second question' } });
+    fireEvent.click(view.getByTestId('node-conversation-send'));
+    await waitFor(() => expect(view.getByTestId('node-conversation-transcript')).toHaveTextContent('Answer 4'));
+    const turns = view.getByTestId('node-conversation-transcript').querySelectorAll('article');
+    expect([...turns].map(turn => turn.getAttribute('data-role'))).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect([...turns].map(turn => turn.textContent)).toEqual([
+      expect.stringContaining('First question'), expect.stringContaining('Answer 2'),
+      expect.stringContaining('Second question'), expect.stringContaining('Answer 4'),
+    ]);
+  });
+
+  it('restores every bounded page of history without discarding earlier user turns', async () => {
+    vi.useRealTimers();
+    const base = makeConversationDetail();
+    historyPickerMockState.detail = { ...base, turns: Array.from({ length: 84 }, (_, index) => ({
+      ...base.turns[index % 2], id: `history-${index}`, sequence: index + 1, content: `Message ${index + 1}.`,
+    })) };
+    const view = renderSheet();
+    fireEvent.click(view.getByTestId('mock-conversation-history-select'));
+    const transcript = view.getByTestId('node-conversation-transcript');
+    expect(transcript.querySelectorAll('article')).toHaveLength(40);
+    expect(transcript).not.toHaveTextContent('Message 1.');
+    fireEvent.click(view.getByText('conversation.transcript.load_earlier'));
+    fireEvent.click(view.getByText('conversation.transcript.load_earlier'));
+    expect(transcript.querySelectorAll('article')).toHaveLength(84);
+    expect(transcript).toHaveTextContent('Message 1.');
+    expect(transcript).toHaveTextContent('Message 84.');
+  });
+
+  it('uses the restored thread context without sending the previous node excerpt', async () => {
+    vi.useRealTimers();
+    historyPickerMockState.detail = makeConversationDetail({ origin_node_id: 'other-node', origin_branch_id: 'other-branch' });
+    const fetchMock = vi.fn().mockResolvedValue(makeSseResponse([
+      'event: turn_started\ndata: {"thread_id":"history-thread","turn_id":"new-answer","sequence":4}\n\n',
+      'event: turn_completed\ndata: {"turn_id":"new-answer","sequence":4,"status":"aborted"}\n\n',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+    const view = renderSheet({ origin: { nodeId: 'old-node', nodeType: 'event', excerpt: 'Wrong context' } });
+    fireEvent.click(view.getByTestId('mock-conversation-history-select'));
+    fireEvent.change(view.getByTestId('node-conversation-input'), { target: { value: 'Follow restored context' } });
+    fireEvent.click(view.getByTestId('node-conversation-send'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/conversation/history-thread/turn');
+    expect(JSON.parse(String(options.body))).not.toHaveProperty('origin_excerpt');
+    expect(view.getByTestId('node-context-banner')).not.toHaveTextContent('Wrong context');
+  });
+
+  it.each([
+    { label: 'unconfigured server', server: false, policy: {}, disabled: true },
+    { label: 'bound scenario profile', server: true, policy: {}, disabled: false },
+    { label: 'complete remote BYOK', server: false, policy: { baseUrl: 'https://api.example.com/v1', model: 'example', apiKey: 'fixture-key' }, disabled: false },
+    { label: 'complete local BYOK', server: false, policy: { baseUrl: 'http://localhost:11434/v1', model: 'example' }, disabled: false },
+    { label: 'remote URL without a key', server: false, policy: { baseUrl: 'https://api.example.com/v1', model: 'example' }, disabled: true },
+  ])('$label has the correct send readiness without losing its draft', async ({ server, policy, disabled }) => {
+    vi.useRealTimers();
+    apiState.capabilities.capabilities.llm_configured = false;
+    apiState.getScenario.mockResolvedValue({ conversation_llm_configured: server });
+    window.sessionStorage.setItem('swarmoracle.llm-provider-policy.v1', JSON.stringify(policy));
+    const onSubmit = vi.fn();
+    const onResend = vi.fn();
+    const view = renderSheet({ onSubmit, onResend });
+    const input = view.getByTestId('node-conversation-input');
+    fireEvent.change(input, { target: { value: 'Keep this draft' } });
+    await waitFor(() => expect(apiState.getScenario).toHaveBeenCalled());
+    await act(async () => {});
+    expect(input).toBeEnabled();
+    expect(input).toHaveValue('Keep this draft');
+    if (disabled) {
+      expect(view.getByTestId('node-conversation-send')).toBeDisabled();
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      fireEvent.keyDown(input, { key: 'r', ctrlKey: true });
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(onResend).not.toHaveBeenCalled();
+    } else expect(view.getByTestId('node-conversation-send')).toBeEnabled();
+  });
+
+  it('allows an attempt when readiness probes fail, with an explicit unknown explanation', async () => {
+    vi.useRealTimers();
+    apiState.capabilities.enabled = false;
+    apiState.capabilities.error = new Error('Probe failed');
+    apiState.getScenario.mockRejectedValue(new Error('Offline'));
+    const view = renderSheet({ onSubmit: vi.fn() });
+    fireEvent.change(view.getByTestId('node-conversation-input'), { target: { value: 'Draft' } });
+    await waitFor(() => expect(view.getByTestId('conversation-model-readiness')).toHaveTextContent('conversation.readiness.unknown'));
+    expect(view.getByTestId('node-conversation-send')).toBeEnabled();
+  });
+
 });

@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { getFactionTimeline, isApiError, type FactionTimelineEntry } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { FactionForceGraph } from './FactionForceGraph';
-import { NodeConversationSheet } from './kg/NodeConversationSheet';
+import { NodeConversationSheet, type NodeConversationOrigin } from './kg/NodeConversationSheet';
 
 const FACTION_COLORS = ['#4a90d9', '#e74c3c', '#2ecc71', '#9b59b6', '#e67e22', '#1abc9c', '#f1c40f', '#e91e63'];
 const FACTION_EVENT_ICONS: Record<string, string> = {
@@ -55,7 +55,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
     open: boolean;
     scenarioId: string;
     identityId: string | null;
-    origin: { nodeId: string; nodeType: string; excerpt?: string };
+    origin: NodeConversationOrigin;
   }>({
     open: false,
     scenarioId: '',
@@ -482,6 +482,8 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
                           nodeId: actorId ?? eventFactionKey ?? `faction-event-${round.round}-${eventIndex}`,
                           nodeType: `faction_event:${normalizedEventType}`,
                           excerpt: label,
+                          branchId: round.branch_id,
+                          roundNumber: round.round,
                         },
                       });
                     };

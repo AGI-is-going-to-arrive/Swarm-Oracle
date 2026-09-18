@@ -308,6 +308,22 @@ describe('gameplayCards helpers', () => {
     expect(tracks.resourceValue).toBe(3);
   });
 
+  it.each([
+    ['Harborfield considers a night bus pilot.', 'generic'],
+    ['The support group meets in a chair circle.', 'generic'],
+    ['Harborfield asks whether a harbor should close.', 'trade'],
+    ['A HARBOR, with a tariff dispute.', 'trade'],
+    ['harbor_name and chairmanship', 'generic'],
+    ['A supply chain is interrupted.', 'trade'],
+    ['A rotating external review board makes the decision.', 'generic'],
+    ['本地港口关税调整会怎样？', 'trade'],
+    ['如果AI接管治理会怎样？', 'governance'],
+    ['如果人工智能接管城市会怎样？', 'governance'],
+    ['本地harbor关闭会怎样？', 'trade'],
+  ])('matches profile words without inventing topics inside names: %s', (question, expected) => {
+    expect(inferGameplayProfile(question).id).toBe(expected);
+  });
+
   it('infers gameplay profiles from theme and question', () => {
     expect(inferGameplayProfile('如果人工智能统治世界？', 'scifi_base').id).toBe('governance');
     expect(inferGameplayProfile('citizens assembly after election crisis', 'civic_chamber').id).toBe('governance');

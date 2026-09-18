@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { getScenario, getStory } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
@@ -51,6 +51,7 @@ function ReportStatePanel({ title, desc, actionLabel, onAction, isPrimary = fals
 export default function ResultReportView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
@@ -205,9 +206,15 @@ export default function ResultReportView() {
     );
   }
 
-  const isReplayMode = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).has('replay') || new URLSearchParams(window.location.search).has('local'));
-  const isBrief = storyData?.full_report && 'detail_level' in storyData.full_report
-    && storyData.full_report.detail_level === 'brief';
+  const historicalReport = storyData?.historical_full_report;
+  const hasHistory = Boolean(historicalReport && 'sections' in historicalReport);
+  const viewingHistory = hasHistory && searchParams.get('history') === '1';
+  const displayedStory = viewingHistory && storyData
+    ? { ...storyData, full_report: historicalReport, full_report_stale: true }
+    : storyData;
+  const isReplayMode = viewingHistory || searchParams.has('replay') || searchParams.has('local');
+  const isBrief = displayedStory?.full_report && 'detail_level' in displayedStory.full_report
+    && displayedStory.full_report.detail_level === 'brief';
 
   // Minimal context for ResultReportPanel (it only reads storyData/activeScenarioId/isZh/isReplayMode).
   const contextValue = {
@@ -218,7 +225,7 @@ export default function ResultReportView() {
     isZh,
     isReplayMode,
     scenario,
-    storyData,
+    storyData: displayedStory,
     branches: storyData?.branches || [],
   } as unknown as import('./result/ResultContext').ResultViewContextValue;
 
@@ -236,7 +243,8 @@ export default function ResultReportView() {
 
         <header className="result-header">
           <h1 className="result-title">
-            {t(isBrief ? 'result.report.briefTitle' : 'result.report.fullReport')}
+            {t(viewingHistory ? 'result.report.historyTitle'
+              : isBrief ? 'result.report.briefTitle' : 'result.report.fullReport')}
           </h1>
           {storyData?.question && (
             <div className="result-question">
@@ -245,7 +253,30 @@ export default function ResultReportView() {
           )}
         </header>
 
-        <ResultReportPanel variant="standalone" onRefresh={refetch} />
+        {hasHistory && (
+          <div className="report-history-switch">
+            {viewingHistory && <p role="note">{t('result.report.historyReadOnly')}</p>}
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                if (viewingHistory) next.delete('history');
+                else next.set('history', '1');
+                setSearchParams(next);
+              }}
+            >
+              {t(viewingHistory ? 'result.report.returnCurrent' : 'result.report.readPreviousFull')}
+            </button>
+          </div>
+        )}
+        <ResultReportPanel
+          key={viewingHistory ? 'historical' : 'current'}
+          variant="standalone"
+          storyData={displayedStory}
+          isReplayMode={isReplayMode}
+          onRefresh={viewingHistory ? undefined : refetch}
+        />
       </div>
     </ResultContextProvider>
   );

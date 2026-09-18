@@ -124,7 +124,7 @@ def _resolve_ending_room_provider(
     """Resolve the persisted room binding for generation, followups, and tools."""
     from app.config import settings
     from app.log_sanitize import _scrub_sensitive_text
-    from app.services.llm_client import is_local_provider_url
+    from app.services.llm_client import is_local_provider_url, resolve_reasoning_effort
     from app.services.llm_resolution import (
         merge_profile_provider_overrides,
         model_profile_provider_unresolved,
@@ -209,7 +209,11 @@ def _resolve_ending_room_provider(
     validated_key, validated_url = _validate_ending_room_llm_overrides(
         overrides.get("api_key"), overrides.get("base_url"),
     )
-    overrides.update(api_key=validated_key, base_url=validated_url)
+    overrides.update(
+        api_key=validated_key,
+        base_url=validated_url,
+        reasoning_effort=resolve_reasoning_effort(context.get("reasoning_effort")),
+    )
     profile = session.get(ModelProfile, profile_id) if profile_id else None
     effective_model = overrides.get("model") or settings.LLM_MODEL_NAME
     return overrides, {

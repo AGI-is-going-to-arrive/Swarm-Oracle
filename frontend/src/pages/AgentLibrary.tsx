@@ -2,8 +2,8 @@
    Phase 3 F3 — Agent Library (Grid View) + Favorites Gallery
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   deleteAgent,
@@ -42,6 +42,9 @@ export function AgentLibrary() {
   const { identities, loading, error, errorDetails, fetchIdentities, refreshIdentities, setIdentities } = useAgentStore();
   const errorDiagnostic = getApiErrorDiagnostic(errorDetails);
   const userId = getSessionBoundUserId();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const editLinksRef = useRef(new Map<string, HTMLAnchorElement>());
   const [profileAgent, setProfileAgent] = useState<AgentIdentityInfo | null>(null);
   const [tab, setTab] = useState<LibraryTab>('all');
   const [search, setSearch] = useState('');
@@ -55,6 +58,24 @@ export function AgentLibrary() {
   const [importOpen, setImportOpen] = useState(false);
   const [agentPackOpen, setAgentPackOpen] = useState(false);
   const [agentPackExportOpen, setAgentPackExportOpen] = useState(false);
+
+  useEffect(() => {
+    const navigationState: unknown = location.state;
+    if (!navigationState || typeof navigationState !== 'object' || Array.isArray(navigationState)) return;
+    const state = navigationState as Record<string, unknown>;
+    if (typeof state.focusAgentId !== 'string' || capLoading || loading) return;
+    if (state.focusOwnerId === userId && enabled && !capError) {
+      editLinksRef.current.get(state.focusAgentId)?.focus({ preventScroll: true });
+    }
+    const nextState = { ...state };
+    delete nextState.focusAgentId;
+    delete nextState.focusOwnerId;
+    navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, {
+      replace: true,
+      state: Object.keys(nextState).length > 0 ? nextState : null,
+    });
+  }, [capError, capLoading, enabled, identities, loading, location.hash, location.pathname,
+    location.search, location.state, navigate, userId]);
 
   const refreshFavorites = useCallback(async () => {
     setFavoritesLoading(true);
@@ -247,6 +268,22 @@ export function AgentLibrary() {
         onSelect={() => setProfileAgent(agent)}
       />
       <div className="agent-library-card-wrap__row">
+        {agent.kind !== 'generated' && (
+          <Link
+            to={`/agents/edit/${encodeURIComponent(agent.id)}`}
+            ref={(element) => {
+              if (element) editLinksRef.current.set(agent.id, element);
+              else editLinksRef.current.delete(agent.id);
+            }}
+            className="agent-card__action"
+            aria-label={t('agents.edit_agent_aria', {
+              name: agent.display_name,
+              defaultValue: 'Edit {{name}}',
+            })}
+          >
+            {t('agents.edit', 'Edit')}
+          </Link>
+        )}
         {exportEnabled && (
           <ExportButton identityId={agent.id} name={agent.display_name} />
         )}

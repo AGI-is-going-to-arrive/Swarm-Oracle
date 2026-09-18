@@ -268,11 +268,15 @@ async def _sse_event_stream(
     fallback_data: dict[str, object] | None = None,
 ):
     """Translate an async iterator of dicts into SSE text frames."""
+    terminal_emitted = False
     try:
         async for event in iterator:
+            if terminal_emitted:
+                continue
             event_name = event.get("event", "message")
             data = event.get("data", {})
             data.setdefault("request_id", request_id)
+            terminal_emitted = event_name in {"turn_completed", "turn_error", "turn_aborted"}
             yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 — terminal fallback
         logger.warning(
@@ -280,6 +284,7 @@ async def _sse_event_stream(
             request_id,
             redact_byok(str(exc)),
         )
+    if not terminal_emitted:
         err_payload = {
             **(fallback_data or {}),
             "status": "error",

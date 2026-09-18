@@ -135,8 +135,8 @@ function parseArgs(argv) {
     }
   }
 
-  if (!["matrix", "corners", "mobile", "cross-browser", "safari", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-suite.mjs <matrix|corners|mobile|cross-browser|safari|full> [--url URL] [--sample-matrix PATH] [--output-dir DIR] [--themes governance,law] [--scenario-id ID] [--browsers firefox,webkit] [--webdriver-url URL] [--headless]");
+  if (!["matrix", "corners", "mobile", "cross-browser", "safari", "full", "theater-layout"].includes(args.mode)) {
+    throw new Error("Usage: node scripts/e2e-suite.mjs <matrix|corners|mobile|cross-browser|safari|full|theater-layout> [--url URL] [--sample-matrix PATH] [--output-dir DIR] [--themes governance,law] [--scenario-id ID] [--browsers firefox,webkit] [--webdriver-url URL] [--headless]");
   }
 
   return args;
@@ -3276,6 +3276,308 @@ async function runMobileSuite(args) {
   }
 }
 
+function assertOfflineTheaterLayoutMode(fixtureMode) {
+  if (!fixtureMode) {
+    throw new Error("theater-layout requires SWARM_E2E_FIXTURE_MODE=1; live backend access is forbidden");
+  }
+}
+
+function createTheaterLayoutFixture() {
+  const store = createFixtureStore();
+  const scenario = store.getScenario(FIXTURE_SCENARIO_IDS.governance);
+  // Unlike the legacy generic fixture, every non-root fork needs its real parent.
+  scenario.branches[1].parent_branch_id = scenario.branches[0].id;
+  scenario.question = "如果跨部门议会需要同时审查公共服务的长期承诺、现有资源和历史干预记录，会怎样形成可核验的决定？";
+  scenario.snapshot_import = {
+    source_status: "done", mode: "read_only", worker_resumed: false,
+    resume_action: null, reason_code: "READ_ONLY_SNAPSHOT",
+  };
+  scenario.messages = scenario.branches.flatMap((branch) => [1, 2, 3]
+    .filter((round) => round > branch.fork_round)
+    .map((round) => ({
+    agent: scenario.agents[round - 1].name,
+    agent_id: scenario.agents[round - 1].id,
+    branch: branch.id,
+    round,
+    message: `已保存的第 ${round} 轮讨论：保留原始记录，并逐项审查公共服务资源。`,
+    emotion: null,
+    })));
+  scenario.domain_world = {
+    version: 1, status: "active", reason_code: null, failure_code: null,
+    schema_hash: `sha256:${"a".repeat(64)}`, unit_registry_version: "unit_registry_v1",
+    as_of_round: 3,
+    variables: [{
+      variable_id: "service_capacity", label_en: "Available public service capacity",
+      label_zh: "可用公共服务容量", value_type: "integer", semantic_role: "capacity",
+      unit: "count", scale: 0, initial_value: "10", minimum: "0", maximum: "100",
+      enum_values: [],
+    }],
+    branch_states: scenario.branches.map((branch) => ({
+      branch_id: branch.id, status: "active", reason_code: null, as_of_round: 3,
+      state_revision: `sha256:${"b".repeat(64)}`, semantic_state_hash: `sha256:${"c".repeat(64)}`,
+      values: [{ variable_id: "service_capacity", value: "12" }], latest_round_deltas: [],
+    })),
+  };
+  const effects = {
+    scenario_id: scenario.id,
+    effects: [{
+      intervention_log_id: "fixture-layout-receipt", card_id: null,
+      card_label: "Saved public service review", round_number: 2, status: "applied",
+      affected_agents: [{ agent_id: scenario.agents[0].id, display_name: scenario.agents[0].name }],
+      response_excerpts: [{ agent_id: scenario.agents[0].id, excerpt: "保留已保存的审查记录。" }],
+      confidence: 0.75, no_response_detected: false, created_at: "2026-09-18T00:00:00Z",
+    }],
+    applied: [],
+  };
+  return { store, scenario, effects };
+}
+
+function buildTheaterLayoutWsFixture(scenario) {
+  const ws = buildFixtureWsInitScript([{ scenario, complete: true }]);
+  return {
+    content: `(${ws.fn.toString()})(${JSON.stringify(ws.arg)});
+      // A completed imported snapshot may connect during initial hydration.
+      // Keep the existing auth/escape guards, but never inject a new lifecycle.
+      window.WebSocket.prototype._replay = function readOnlySnapshot() {};
+    `,
+  };
+}
+
+function assertTheaterLayoutGeometry(geometry, viewport) {
+  const minimumHeight = viewport.width <= 900 ? 180 : 240;
+  if (!geometry || geometry.canvas.height < minimumHeight || geometry.container.height < minimumHeight) {
+    throw new Error(`Theater canvas is too small: ${JSON.stringify(geometry)}`);
+  }
+  if (geometry.visible.width < 100 || geometry.visible.height < minimumHeight / 2) {
+    throw new Error(`Theater canvas is clipped or outside the usable viewport: ${JSON.stringify(geometry)}`);
+  }
+  if (geometry.root.scrollWidth > geometry.root.clientWidth + 1 || geometry.documentOverflow > 1) {
+    throw new Error(`Theater overflows horizontally: ${JSON.stringify(geometry)}`);
+  }
+  if (geometry.root.overflowY !== "auto" || geometry.wrapperPosition !== "relative") {
+    throw new Error(`Theater has lost its page-owned scrolling layout: ${JSON.stringify(geometry)}`);
+  }
+  if (Math.abs(geometry.container.width - geometry.canvas.width) > 4
+    || Math.abs(geometry.container.height - geometry.canvas.height) > 4) {
+    throw new Error(`Theater letterboxing displaces DOM bubble coordinates: ${JSON.stringify(geometry)}`);
+  }
+  for (const bubble of geometry.bubbles ?? []) {
+    if (bubble.left < geometry.container.left + 4 || bubble.right > geometry.container.right - 4
+      || bubble.top < geometry.container.top + 4 || bubble.bottom > geometry.container.bottom - 4) {
+      throw new Error(`Theater speech is clipped at a stage edge: ${JSON.stringify(geometry)}`);
+    }
+  }
+}
+
+async function readTheaterLayoutGeometry(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector(".phaser-game-container canvas");
+    const container = document.querySelector(".phaser-game-container");
+    const root = document.querySelector(".simulation-view--theater");
+    const wrapper = document.querySelector(".theater-panel__game-wrapper");
+    if (!canvas || !container || !root || !wrapper) return null;
+    const rect = canvas.getBoundingClientRect();
+    let left = Math.max(0, rect.left);
+    let right = Math.min(innerWidth, rect.right);
+    let top = Math.max(0, rect.top);
+    let bottom = Math.min(innerHeight, rect.bottom);
+    for (let parent = canvas.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      const bounds = parent.getBoundingClientRect();
+      if (["auto", "scroll", "hidden", "clip"].includes(style.overflowX)) {
+        left = Math.max(left, bounds.left);
+        right = Math.min(right, bounds.right);
+      }
+      if (["auto", "scroll", "hidden", "clip"].includes(style.overflowY)) {
+        top = Math.max(top, bounds.top);
+        bottom = Math.min(bottom, bounds.bottom);
+      }
+    }
+    const containerRect = container.getBoundingClientRect();
+    return {
+      canvas: { width: rect.width, height: rect.height, top: rect.top, bottom: rect.bottom },
+      container: {
+        width: containerRect.width, height: containerRect.height,
+        left: containerRect.left, right: containerRect.right,
+        top: containerRect.top, bottom: containerRect.bottom,
+      },
+      bubbles: Array.from(wrapper.querySelectorAll(".bubble-overlay__bubble"))
+        .filter((element) => getComputedStyle(element).opacity !== "0")
+        .map((element) => {
+          const bounds = element.getBoundingClientRect();
+          return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom };
+        }),
+      visible: { width: Math.max(0, right - left), height: Math.max(0, bottom - top) },
+      root: {
+        scrollWidth: root.scrollWidth, clientWidth: root.clientWidth,
+        scrollHeight: root.scrollHeight, clientHeight: root.clientHeight,
+        overflowY: getComputedStyle(root).overflowY,
+      },
+      wrapperPosition: getComputedStyle(wrapper).position,
+      documentOverflow: document.documentElement.scrollWidth - innerWidth,
+      overflowElements: Array.from(root.querySelectorAll("*")).flatMap((element) => {
+        const bounds = element.getBoundingClientRect();
+        if (!bounds.width || bounds.right <= root.getBoundingClientRect().right + 1) return [];
+        const style = getComputedStyle(element);
+        return [{
+          tag: element.tagName, className: element.className,
+          left: bounds.left, right: bounds.right, width: bounds.width,
+          overflowX: style.overflowX, minWidth: style.minWidth,
+          parent: element.parentElement?.className ?? null,
+        }];
+      }).slice(0, 20),
+    };
+  });
+}
+
+async function runTheaterLayoutSuite(args) {
+  assertOfflineTheaterLayoutMode(FIXTURE_MODE);
+  const cases = [
+    { width: 1280, height: 640, language: "en" },
+    { width: 1440, height: 900, language: "zh" },
+    { width: 390, height: 844, language: "zh" },
+  ];
+  const results = [];
+  for (const browserName of args.browsers.length ? args.browsers : ["chromium"]) {
+    const { browser } = await launchBrowser(args.headless, browserName);
+    try {
+      for (const viewport of cases) {
+        const label = `${browserName}-${viewport.width}x${viewport.height}-${viewport.language}`;
+        const outputDir = path.join(args.outputDir, label);
+        ensureDir(outputDir);
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          reducedMotion: "reduce", locale: viewport.language === "zh" ? "zh-CN" : "en-US",
+        });
+        const page = await context.newPage();
+        const { store, scenario, effects } = createTheaterLayoutFixture();
+        const nodeFixture = installNodeFetchFixture(store);
+        const blocked = [];
+        const pageErrors = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          if (url.origin === new URL(args.baseUrl).origin) return route.continue();
+          blocked.push({ method: route.request().method(), url: url.toString() });
+          return route.abort("blockedbyclient");
+        });
+        const wsEscapes = [];
+        try {
+          await page.exposeBinding("__recordFixtureWsEscape", (_source, entry) => wsEscapes.push(entry));
+          await page.addInitScript(buildTheaterLayoutWsFixture(scenario));
+          await page.addInitScript((language) => {
+            localStorage.setItem("swarmoracle:language:v1", language);
+          }, viewport.language);
+          const { unhandled } = await installApiFixtures(page, store, {
+            overrides: [{
+              pattern: `**/api/scenario/${scenario.id}/intervention-effects*`,
+              handler: (route) => route.fulfill({
+                status: 200, contentType: "application/json", body: JSON.stringify(effects),
+              }),
+            }],
+          });
+          // The layout probe may read fixtures, but it cannot create or mutate even a fixture run.
+          await page.route("**/api/**", (route) => {
+            if (route.request().method() === "GET") return route.fallback();
+            blocked.push({ method: route.request().method(), url: route.request().url() });
+            return route.fulfill({ status: 405, body: "Fixture layout probe is read-only" });
+          });
+          await page.goto(`${args.baseUrl}/sim/${scenario.id}`, { waitUntil: "domcontentloaded" });
+          await ensureCompletedSimulationTheaterMode(page, scenario.id);
+          await waitForAutomation(page, (payload) => (
+            payload.scene?.agent_count > 0 && payload.page?.replay_state?.theater_ready === true
+          ), 30000, "fixture Theater scene");
+          await page.locator('[data-testid="intervention-receipt-card"]').waitFor({ state: "attached" });
+          const initialGeometry = await readTheaterLayoutGeometry(page);
+          assertTheaterLayoutGeometry(initialGeometry, viewport);
+          writeJson(path.join(outputDir, "initial-geometry.json"), initialGeometry);
+          await saveScreenshot(page, path.join(outputDir, "initial.png"));
+
+          for (const kind of ["world", "history"]) {
+            const disclosure = page.locator(`.sim-context-disclosure[data-context="${kind}"]`);
+            const summary = disclosure.locator("summary");
+            await summary.focus();
+            await summary.press("Enter");
+            if (!await disclosure.evaluate((element) => element.open)) {
+              throw new Error(`${kind} disclosure did not open with the keyboard`);
+            }
+          }
+          const history = page.locator('[data-context="history"]');
+          if (!await history.locator('[data-testid="simulation-snapshot-banner"]').isVisible()) {
+            throw new Error("Imported history was lost inside the disclosure");
+          }
+          await history.locator("button").nth(1).click();
+          if (await page.locator(".sim-content__panel--collapsed").count()) {
+            throw new Error("Saved messages could not be opened");
+          }
+          const panel = page.locator(".sim-content__panel");
+          if (!await panel.evaluate((element) => document.activeElement === element)) {
+            throw new Error("Saved messages did not receive keyboard focus");
+          }
+          await page.locator(".sim-sidebar-toggle").click();
+          for (const kind of ["world", "history"]) {
+            await page.locator(`[data-context="${kind}"] > summary`).click();
+          }
+          const filters = page.locator(".theater-panel__filters select");
+          const filterOptions = await filters.evaluateAll((elements) => (
+            elements.map((element) => Array.from(element.options, (option) => option.value))
+          ));
+          if (!filterOptions[0]?.includes(scenario.branches[1].id)
+            || !filterOptions[1]?.includes("3")) {
+            throw new Error(`Theater fixture replay choices changed: ${JSON.stringify(filterOptions)}`);
+          }
+          await filters.nth(0).selectOption(scenario.branches[1].id);
+          await filters.nth(1).selectOption("3");
+          await waitForAutomation(page, (payload) => (
+            payload.page?.replay_state?.selected_branch_id === scenario.branches[1].id
+            && payload.page?.replay_state?.selected_round === 3
+          ), 10000, "fixture branch and round selection");
+
+          const receipt = page.locator('[data-testid="intervention-receipt-card"]');
+          await receipt.scrollIntoViewIfNeeded();
+          if (!await receipt.isVisible()) throw new Error("Persisted receipts are unreachable");
+          await page.locator(".phaser-game-container canvas").scrollIntoViewIfNeeded();
+          const finalGeometry = await readTheaterLayoutGeometry(page);
+          assertTheaterLayoutGeometry(finalGeometry, viewport);
+          const capture = await page.evaluate(async () => {
+            const data = await window.capture_game_screenshot?.("canvas");
+            return { png: data?.startsWith("data:image/png") ?? false, bytes: data?.length ?? 0 };
+          });
+          if (!capture.png || capture.bytes < 2000) throw new Error("Canvas capture is empty");
+          if (viewport.width === 1440) {
+            const panelCapture = await page.evaluate(async () => {
+              const data = await window.capture_game_screenshot?.("panel");
+              return data?.startsWith("data:image/png") && data.length > 2000;
+            });
+            if (!panelCapture) throw new Error("Theater panel capture is unavailable");
+          }
+          await saveScreenshot(page, path.join(outputDir, "verified.png"));
+          await assertNoFixtureEscapes(page, { unhandled, nodeFixture, wsEscapes }, outputDir, label);
+          if (blocked.length || pageErrors.length) {
+            throw new Error(`Layout fixture guard failed: ${JSON.stringify({ blocked, pageErrors })}`);
+          }
+          const result = { label, passed: true, initialGeometry, finalGeometry, capture };
+          writeJson(path.join(outputDir, "geometry.json"), result);
+          results.push(result);
+        } catch (error) {
+          await saveScreenshot(page, path.join(outputDir, "failure.png")).catch(() => {});
+          writeJson(path.join(outputDir, "failure.json"), {
+            error: String(error), geometry: await readTheaterLayoutGeometry(page).catch(() => null),
+            automation: await readAutomation(page).catch(() => null), blocked, pageErrors,
+          });
+          throw error;
+        } finally {
+          nodeFixture.restore();
+          await context.close();
+        }
+      }
+    } finally {
+      await closePlaywrightBrowser(browser);
+    }
+  }
+  return { mode: "theater-layout", offline: true, passed: true, results };
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const outputDir = args.outputDir || path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-${args.mode}`);
@@ -3293,6 +3595,8 @@ async function main() {
     result = await runCrossBrowserDirectorStateSuite(args);
   } else if (args.mode === "safari") {
     result = await runSafariDirectorStateSuite(args);
+  } else if (args.mode === "theater-layout") {
+    result = await runTheaterLayoutSuite(args);
   } else {
     const matrixDir = path.join(outputDir, "matrix");
     const cornersDir = path.join(outputDir, "corners");
@@ -3314,6 +3618,10 @@ async function main() {
 }
 
 export const __test__ = {
+  assertOfflineTheaterLayoutMode,
+  assertTheaterLayoutGeometry,
+  buildTheaterLayoutWsFixture,
+  createTheaterLayoutFixture,
   buildLaunchCandidates,
   deleteSafariSession,
   putScenarioDirectorStateViaApi,

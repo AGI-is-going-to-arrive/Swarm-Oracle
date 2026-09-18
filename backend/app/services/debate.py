@@ -64,6 +64,7 @@ from app.services.llm_client import (
     llm_call,
     llm_call_json_with_stream_fallback,
     llm_request_scope,
+    resolve_reasoning_effort,
 )
 from app.services.resource_deletion import resource_is_deleted
 from app.services.runtime_lock import (
@@ -1089,6 +1090,7 @@ async def _enhance_insights_with_llm(
         try:
             with llm_request_scope(
                 quota_key=None,
+                reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
                 purpose=f"debate_phase_insight_{phase_name}",
                 requests_per_minute=overrides.get("requests_per_minute"),
                 tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -1106,7 +1108,7 @@ async def _enhance_insights_with_llm(
                 raw = await llm_call_json_with_stream_fallback(
                     prompt,
                     temperature=0.75,
-                    reasoning_effort=overrides.get("reasoning_effort") or "medium",
+                    reasoning_effort=overrides.get("reasoning_effort"),
                     model=overrides.get("model"),
                     api_key=overrides.get("api_key"),
                     base_url=overrides.get("base_url"),
@@ -1708,6 +1710,7 @@ async def _generate_judge_analysis(
         overrides = llm_overrides or {}
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose="debate_judge_summary",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -1725,7 +1728,7 @@ async def _generate_judge_analysis(
             for attempt in range(2):
                 result = await llm_call_json_with_stream_fallback(
                     prompt,
-                    reasoning_effort=overrides.get("reasoning_effort") or "medium",
+                    reasoning_effort=overrides.get("reasoning_effort"),
                     model=overrides.get("model"),
                     api_key=overrides.get("api_key"),
                     base_url=overrides.get("base_url"),
@@ -1895,6 +1898,7 @@ async def _generate_turn_content(
         # Pass-1: natural language debate line
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose=f"debate_turn_{phase.value}",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -1911,7 +1915,7 @@ async def _generate_turn_content(
         ):
             raw_text = await llm_call(
                 combined_prompt,
-                reasoning_effort=overrides.get("reasoning_effort") or "medium",
+                reasoning_effort=overrides.get("reasoning_effort"),
                 model=overrides.get("model"),
                 api_key=overrides.get("api_key"),
                 base_url=overrides.get("base_url"),
@@ -1936,11 +1940,12 @@ async def _generate_turn_content(
             exc,
         )
 
-    # Pass-2 (retry): lower temperature + lower reasoning to reduce template
+    # Pass-2 (retry): lower temperature to reduce template
     # echo risk before failing this required debate turn closed.
     try:
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose=f"debate_turn_{phase.value}_retry",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -1957,7 +1962,7 @@ async def _generate_turn_content(
         ):
             raw_text = await llm_call(
                 combined_prompt,
-                reasoning_effort="low",
+                reasoning_effort=overrides.get("reasoning_effort"),
                 model=overrides.get("model"),
                 api_key=overrides.get("api_key"),
                 base_url=overrides.get("base_url"),
@@ -2346,6 +2351,7 @@ async def run_debate_background(
                 persona_overrides = judge_overrides or {}
                 with llm_request_scope(
                     quota_key=f"user:{quota_key}" if quota_key else None,
+                    reasoning_effort=resolve_reasoning_effort(persona_overrides.get("reasoning_effort")),
                     purpose="debate_persona_generation",
                     requests_per_minute=persona_overrides.get("requests_per_minute"),
                     tokens_per_minute=persona_overrides.get("tokens_per_minute"),
@@ -3723,6 +3729,7 @@ async def _generate_supporting_turn_reason(
     try:
         with llm_request_scope(
             quota_key=None,
+            reasoning_effort=resolve_reasoning_effort(overrides.get("reasoning_effort")),
             purpose="debate_supporting_turn_reason",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
@@ -3740,7 +3747,7 @@ async def _generate_supporting_turn_reason(
             raw = await llm_call(
                 prompt,
                 temperature=0.75,
-                reasoning_effort=overrides.get("reasoning_effort") or "medium",
+                reasoning_effort=overrides.get("reasoning_effort"),
                 model=overrides.get("model"),
                 api_key=overrides.get("api_key"),
                 base_url=overrides.get("base_url"),

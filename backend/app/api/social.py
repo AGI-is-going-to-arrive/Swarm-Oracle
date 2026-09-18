@@ -43,6 +43,7 @@ from app.services.llm_client import (
     is_local_provider_url,
     llm_call,
     llm_request_scope,
+    resolve_reasoning_effort,
     validate_llm_base_url,
 )
 from app.services.llm_resolution import (
@@ -1333,6 +1334,7 @@ async def _generate_headline_cards(
         with llm_request_scope(
             quota_key=f"user:{quota_user_id}" if quota_user_id else None,
             purpose="social_headline_cards",
+            reasoning_effort=effective_llm.reasoning_effort,
             requests_per_minute=effective_llm.requests_per_minute,
             tokens_per_minute=effective_llm.tokens_per_minute,
             concurrency=effective_llm.concurrency,
@@ -1724,6 +1726,7 @@ async def _generate_social_copy(
         language=social_language,
     )
     provider_policy = scenario.parsed_context or {}
+    effective_reasoning_effort = resolve_reasoning_effort(provider_policy.get("reasoning_effort"))
     recovered_quota_user_id: object = None
     if model_profile_policy is not None:
         effective_api_key = model_profile_policy.api_key
@@ -1829,6 +1832,7 @@ async def _generate_social_copy(
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose="social_copy",
+            reasoning_effort=effective_reasoning_effort,
             requests_per_minute=effective_requests_per_minute,
             tokens_per_minute=effective_tokens_per_minute,
             concurrency=effective_concurrency,

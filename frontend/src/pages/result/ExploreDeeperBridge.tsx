@@ -2,7 +2,8 @@
    SwarmOracle — "Explore Deeper" bridge cards (workbench mode)
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { FileText, GitBranch, MessageCircle } from 'lucide-react';
 import { ScenarioAgentPicker } from '../../components/result/ScenarioAgentPicker';
 import type { AgentInfo, StoryData } from '../../types';
 import { useResultContext } from './ResultContext';
@@ -16,7 +17,16 @@ type FullReportBridgeCopy = {
 
 function getFullReportBridgeCopy(
   report: StoryData['full_report'],
+  stale = false,
 ): FullReportBridgeCopy {
+  if (report && stale) {
+    return {
+      titleKey: 'result.bridge_historical_report_title',
+      titleDefault: 'Read the saved analysis',
+      descKey: 'result.bridge_historical_report_desc',
+      descDefault: 'Review the earlier analysis or generate one for the current state.',
+    };
+  }
   if (!report) {
     return {
       titleKey: 'result.bridge_full_report_generate_title',
@@ -36,6 +46,14 @@ function getFullReportBridgeCopy(
   }
 
   const hasSavedSections = report.sections.length > 0;
+  if (report.detail_level === 'brief' && hasSavedSections) {
+    return {
+      titleKey: 'result.bridge_brief_report_title',
+      titleDefault: 'Read the short report',
+      descKey: 'result.bridge_brief_report_desc',
+      descDefault: 'Read saved evidence first; request a full analysis when needed.',
+    };
+  }
   if (report.status === 'generating') {
     return {
       titleKey: 'result.bridge_full_report_progress_title',
@@ -98,6 +116,7 @@ export default function ExploreDeeperBridge() {
     agents,
     setAgentFollowupTarget,
     setProfileTarget,
+    setResultViewMode,
     isWorkbenchMode,
     comparisonHref,
     handleOpenComparison,
@@ -106,6 +125,23 @@ export default function ExploreDeeperBridge() {
   } = useResultContext();
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [counterfactualFocusScenario, setCounterfactualFocusScenario] = useState<string | null>(null);
+  useEffect(() => {
+    if (counterfactualFocusScenario === null) return;
+    const frame = window.requestAnimationFrame(() => {
+      setCounterfactualFocusScenario(null);
+      if (counterfactualFocusScenario !== activeScenarioId || !isWorkbenchMode) return;
+      const editor = document.getElementById('result-counterfactual');
+      if (!editor || editor.dataset.scenarioId !== activeScenarioId) return;
+      editor.scrollIntoView({ block: 'start', behavior: 'auto' });
+      editor.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeScenarioId, counterfactualFocusScenario, isWorkbenchMode]);
+  const openCounterfactualEditor = useCallback(() => {
+    setResultViewMode('workbench');
+    setCounterfactualFocusScenario(activeScenarioId);
+  }, [activeScenarioId, setResultViewMode]);
 
   const handleAgentSelect = useCallback(
     (agent: AgentInfo) => {
@@ -162,7 +198,7 @@ export default function ExploreDeeperBridge() {
   const hasCausalGraph = Boolean(scenario?.causal_graph_id);
   const hasReplayLineage = branches.some((branch) => Boolean(branch.replay_source_branch_id));
   const hasReplayData = hasReplayLineage || (causalEnabled && hasCausalGraph);
-  const fullReportCopy = getFullReportBridgeCopy(storyData?.full_report);
+  const fullReportCopy = getFullReportBridgeCopy(storyData?.full_report, storyData?.full_report_stale);
   const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false)
     && branches.length > 1;
   const agentConvEnabled = !!capabilities?.agent_conversation?.enabled;
@@ -187,7 +223,6 @@ export default function ExploreDeeperBridge() {
   type LinkEntry = {
     key: string;
     kind: 'link';
-    icon: string;
     titleKey: string;
     titleDefault: string;
     descKey: string;
@@ -201,7 +236,6 @@ export default function ExploreDeeperBridge() {
   type ActionEntry = {
     key: string;
     kind: 'action';
-    icon: string;
     titleKey: string;
     titleDefault: string;
     descKey: string;
@@ -215,9 +249,23 @@ export default function ExploreDeeperBridge() {
 
   const entries: Entry[] = [
     {
+      key: 'counterfactual',
+      kind: 'action',
+      titleKey: 'result.change_editor_title',
+      titleDefault: 'Rewrite a turn and replay',
+      descKey: 'result.change_editor_desc',
+      descDefault: 'Choose a saved turn and explore a different decision.',
+      enabled: Boolean(capabilities?.counterfactual_replay?.enabled)
+        && !isReplayMode && scenario?.status === 'done' && branches.length > 0,
+      onClick: openCounterfactualEditor,
+      disabledKey: isReplayMode ? 'result.bridge_replay_unavailable'
+        : !capabilities?.counterfactual_replay?.enabled ? 'result.bridge_not_enabled'
+          : 'result.change_requires_completed',
+      disabledDefault: 'A completed simulation is required.',
+    },
+    {
       key: 'evidence',
       kind: 'action',
-      icon: '\u{1F4D6}',
       titleKey: 'result.evidence_title',
       titleDefault: 'Read saved evidence',
       descKey: 'result.evidence_desc',
@@ -230,7 +278,6 @@ export default function ExploreDeeperBridge() {
     {
       key: 'full-report',
       kind: 'link',
-      icon: '\u{1F4D1}',
       ...fullReportCopy,
       enabled: (capabilities?.result_report?.enabled ?? false) && !isReplayMode,
       href: `/result/${scenarioId}/report`,
@@ -240,7 +287,6 @@ export default function ExploreDeeperBridge() {
     {
       key: 'causal',
       kind: 'link',
-      icon: '\u{1F578}️',
       titleKey: 'result.next_understand_why',
       titleDefault: 'Causal Graph',
       descKey: 'result.next_understand_why_desc',
@@ -261,7 +307,6 @@ export default function ExploreDeeperBridge() {
     {
       key: 'replay',
       kind: 'link',
-      icon: '\u{1F3AC}',
       titleKey: 'result.next_replay_trace',
       titleDefault: 'Replay Trace',
       descKey: 'result.next_replay_trace_desc',
@@ -282,10 +327,9 @@ export default function ExploreDeeperBridge() {
     {
       key: 'compare',
       kind: 'link',
-      icon: '\u{1F500}',
-      titleKey: 'result.next_replay_different',
+      titleKey: 'result.compare_existing_title',
       titleDefault: 'Compare Branches',
-      descKey: 'result.next_replay_different_desc',
+      descKey: 'result.compare_existing_desc',
       descDefault: 'See how different branches diverged.',
       enabled: compareEnabled && Boolean(comparisonHref),
       href: comparisonHref ?? '#',
@@ -304,7 +348,6 @@ export default function ExploreDeeperBridge() {
     {
       key: 'workbench',
       kind: 'link',
-      icon: '\u{1F6E0}️',
       titleKey: 'result.bridge_workbench_title',
       titleDefault: 'Open Graph Workbench',
       descKey: 'result.bridge_workbench_desc',
@@ -325,7 +368,6 @@ export default function ExploreDeeperBridge() {
     {
       key: 'kg-explorer',
       kind: 'link',
-      icon: '\u{1F578}️',
       titleKey: 'result.bridge_kg_explorer_title',
       titleDefault: 'Knowledge Graph Explorer',
       descKey: 'result.bridge_kg_explorer_desc',
@@ -346,7 +388,6 @@ export default function ExploreDeeperBridge() {
     {
       key: 'timeline-galaxy',
       kind: 'link',
-      icon: '\u{1F30C}',
       titleKey: 'result.bridge_timeline_galaxy_title',
       titleDefault: 'Timeline Galaxy',
       descKey: 'result.bridge_timeline_galaxy_desc',
@@ -367,7 +408,6 @@ export default function ExploreDeeperBridge() {
     {
       key: 'agents',
       kind: 'action',
-      icon: '\u{1F9EC}',
       titleKey: 'result.next_ask_agent',
       titleDefault: 'Ask an Agent',
       descKey: 'result.next_ask_agent_desc',
@@ -386,12 +426,16 @@ export default function ExploreDeeperBridge() {
     : !replayUrl
       ? t('result.bridge_disabled_loading')
       : undefined;
-  const coreEntries = new Set(['evidence', 'full-report', 'compare', 'agents']);
+  const taskGroups = [
+    { key: 'verify', icon: FileText, entries: ['evidence', 'full-report', 'workbench'] },
+    { key: 'ask', icon: MessageCircle, entries: ['agents'] },
+    { key: 'change', icon: GitBranch, entries: ['counterfactual', 'compare'] },
+  ];
+  const coreEntries = new Set(taskGroups.flatMap((group) => group.entries));
   const renderEntry = (entry: Entry) => {
     const isDisabled = !entry.enabled;
     const statusId = `result-bridge-${entry.key}-status`;
     const content = <>
-      <span className="result-bridge__card-icon" aria-hidden="true">{entry.icon}</span>
       <span className="result-bridge__card-name">{t(entry.titleKey, entry.titleDefault)}</span>
       <span className="result-bridge__card-desc">{t(entry.descKey, entry.descDefault)}</span>
       {isDisabled && <span id={statusId} className="result-bridge__card-status">{t(entry.disabledKey, entry.disabledDefault)}</span>}
@@ -414,10 +458,18 @@ export default function ExploreDeeperBridge() {
   return (
     <section id="result-bridge" className="result-bridge">
       <h2 className="result-bridge__heading">{t('result.next_steps_heading')}</h2>
-      <div className="result-bridge__grid">
-        {entries.filter((entry) => coreEntries.has(entry.key)).map(renderEntry)}
+      <div className="result-bridge__tasks">
+        {taskGroups.map((group) => (
+          <section key={group.key} className="result-bridge__task" aria-labelledby={`result-task-${group.key}`}>
+            <h3 id={`result-task-${group.key}`}><group.icon size={20} aria-hidden="true" />{t(`result.task_${group.key}`)}</h3>
+            <div className="result-bridge__task-actions">
+              {group.entries.map((key) => entries.find((entry) => entry.key === key))
+                .filter((entry): entry is Entry => entry !== undefined).map(renderEntry)}
+            </div>
+          </section>
+        ))}
       </div>
-      <details className="result-optional-section" open={isWorkbenchMode}>
+      <details className="result-optional-section">
         <summary>{t('result.more_analysis_tools')}</summary>
         <div className="result-bridge__grid">
           {entries.filter((entry) => !coreEntries.has(entry.key)).map(renderEntry)}
@@ -428,7 +480,6 @@ export default function ExploreDeeperBridge() {
           title={shareReason}
           aria-describedby={shareDisabled ? shareStatusId : undefined}
         >
-          <span className="result-bridge__card-icon" aria-hidden="true">📋</span>
           <span className="result-bridge__card-name">{t('result.next_share')}</span>
           <span className="result-bridge__card-desc">{t('result.next_share_desc')}</span>
           {shareDisabled && shareReason && (

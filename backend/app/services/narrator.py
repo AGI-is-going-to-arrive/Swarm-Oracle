@@ -454,6 +454,7 @@ async def narrate_branch(
     base_url: str | None = None,
     temperature: float | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     web_context_block: str = "",
     question: str = "",
 ) -> dict:
@@ -501,7 +502,7 @@ async def narrate_branch(
             raw_story = await asyncio.wait_for(
                 llm_call(
                     prompt,
-                    reasoning_effort="medium",
+                    reasoning_effort=reasoning_effort,
                     api_key=api_key,
                     base_url=base_url,
                     temperature=temperature if temperature is not None else 0.8,
@@ -570,7 +571,7 @@ async def narrate_branch(
                 raw_result = await asyncio.wait_for(
                     llm_call_json_with_stream_fallback(
                         extract_prompt,
-                        reasoning_effort="low",
+                        reasoning_effort=reasoning_effort,
                         api_key=api_key,
                         base_url=base_url,
                         temperature=0.2,

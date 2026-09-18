@@ -37,6 +37,7 @@ import logging
 import math
 import re
 import threading
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -56,9 +57,15 @@ from app.models.agent_conversation import (
     AgentConversationTurn,
 )
 from app.models.agent_identity import AgentIdentity
-from app.models.database import Agent, AgentMessage, Branch, Round, Scenario, get_engine
+from app.models.checkpoint import FactionEvent
+from app.models.database import Agent, AgentMessage, Branch, Scenario, get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
 from app.services.agent_message_metadata import message_emotion_if_available
+from app.services.branch_lineage import (
+    BranchLineageError,
+    BranchRoundSelection,
+    select_branch_rounds,
+)
 from app.services.llm_client import (
     LLMError,
     format_untrusted_text_block,
@@ -87,12 +94,17 @@ _ALLOWED_TERMINAL_STATES: tuple[str, ...] = (
     "scenario_deleted",
 )
 _CAS_EXPECTED_FROM_DEFAULT: tuple[str, ...] = ("pending", "streaming")
+_TURN_LEASE_DURATION = timedelta(minutes=5)
+_TURN_HEARTBEAT_SECONDS = 30.0
 
 # HC-36: mapped-code whitelist — only these error codes may surface a mapped
 # user-visible ``error_message`` back to the client.  Anything else collapses
 # to a redacted placeholder before the row is persisted.
 _ERROR_MESSAGE_MAP: dict[str, str] = {
     "USER_ABORTED": "Turn aborted by user.",
+    "STALE_TURN_REAPED": "The inactive turn expired. Please try again.",
+    "TURN_REVOKED": "This turn is no longer active.",
+    "INVALID_CONVERSATION_ORIGIN": "Conversation context is no longer available.",
     "LLM_5XX": "LLM provider returned a server error.",
     "LLM_4XX": "LLM provider rejected the request.",
     "LLM_EMPTY": "LLM returned no visible content.",
@@ -132,7 +144,7 @@ _ACTIVE_TURN_CANCEL_EVENTS_LOCK = threading.Lock()
 class _ActiveTurnCancelSlot:
     loop: asyncio.AbstractEventLoop
     event: asyncio.Event
-    reason: Literal["scenario_deleted", "user_aborted"] | None = None
+    reason: Literal["scenario_deleted", "user_aborted", "turn_revoked"] | None = None
 
 
 _ACTIVE_TURN_CANCEL_EVENTS: dict[str, _ActiveTurnCancelSlot] = {}
@@ -149,6 +161,7 @@ class LLMOverrides:
     base_url: str | None
     model: str | None
     disable_user_quota: bool
+    reasoning_effort: str | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
     concurrency: int | None = None
@@ -214,7 +227,7 @@ def _unregister_turn_cancel_event(turn_id: str, event: asyncio.Event) -> None:
 
 def _get_turn_cancel_reason(
     turn_id: str,
-) -> Literal["scenario_deleted", "user_aborted"] | None:
+) -> Literal["scenario_deleted", "user_aborted", "turn_revoked"] | None:
     with _ACTIVE_TURN_CANCEL_EVENTS_LOCK:
         current = _ACTIVE_TURN_CANCEL_EVENTS.get(turn_id)
         return current.reason if current is not None else None
@@ -223,7 +236,7 @@ def _get_turn_cancel_reason(
 def _signal_turn_cancel_event(
     turn_id: str,
     *,
-    reason: Literal["scenario_deleted", "user_aborted"] | None = None,
+    reason: Literal["scenario_deleted", "user_aborted", "turn_revoked"] | None = None,
 ) -> bool:
     with _ACTIVE_TURN_CANCEL_EVENTS_LOCK:
         current = _ACTIVE_TURN_CANCEL_EVENTS.get(turn_id)
@@ -377,6 +390,7 @@ def _recover_thread_profile_overrides(
     )
     resolved = resolve_post_completion_llm_call_config(
         parsed_context=carrier.parsed_context,
+        request_reasoning_effort=overrides.reasoning_effort,
         request_api_key=merged.get("api_key"),
         request_base_url=merged.get("base_url"),
         request_model=merged.get("model"),
@@ -398,6 +412,7 @@ def _recover_thread_profile_overrides(
         base_url=resolved.base_url,
         model=resolved.model,
         disable_user_quota=overrides.disable_user_quota,
+        reasoning_effort=resolved.reasoning_effort,
         requests_per_minute=resolved.requests_per_minute,
         tokens_per_minute=resolved.tokens_per_minute,
         concurrency=resolved.concurrency,
@@ -802,19 +817,18 @@ def create_thread_with_first_turn(
         _verify_scenario_owner(session, scenario_id, owner_user_id)
         _verify_identity_owner(session, agent_identity_id, owner_user_id)
 
-        # H1: ``origin_branch_id`` must belong to the same scenario.  Without
-        # this guard a caller could pin a thread to a foreign-scenario branch,
-        # which then pollutes the prompt-context transcript summarizer (and any
-        # downstream code that re-uses ``thread.origin_branch_id``).  Conceal
-        # existence with a 404 to avoid scenario-id enumeration.
-        if origin_branch_id:
-            origin_branch = session.get(Branch, origin_branch_id)
-            if origin_branch is None or origin_branch.scenario_id != scenario_id:
-                raise api_error(
-                    404,
-                    "BRANCH_NOT_FOUND",
-                    "Origin branch not found for scenario",
-                )
+        origin = _resolve_conversation_origin(
+            session,
+            scenario_id=scenario_id,
+            origin_branch_id=origin_branch_id,
+            origin_round_number=origin_round_number,
+            origin_node_id=origin_node_id,
+            origin_node_type=origin_node_type,
+        )
+        origin_branch_id = origin.branch.id if origin.branch else None
+        origin_round_number = origin.round_number
+        origin_node_id = origin.node.id if origin.node else origin_node_id
+        origin_node_type = origin.node.node_type if origin.node else origin_node_type
 
         # HC-31 quota authority: reject at the gate before any sequence is
         # burned.  Thread cap is per-scenario (structural); daily caps are
@@ -919,6 +933,7 @@ def append_user_turn_and_reserve_assistant(
     turn in ``pending``).
     """
     engine = get_engine()
+    reaped_turn_id: str | None = None
     with Session(engine) as session:
         _begin_immediate_if_supported(session)
 
@@ -926,18 +941,23 @@ def append_user_turn_and_reserve_assistant(
         if thread.active_turn_id:
             active_turn = session.get(AgentConversationTurn, thread.active_turn_id)
             if active_turn is not None and active_turn.status not in _ALLOWED_TERMINAL_STATES:
-                stale_cutoff = _now() - timedelta(minutes=5)
+                stale_cutoff = _now() - _TURN_LEASE_DURATION
                 turn_ts = active_turn.updated_at or active_turn.created_at
                 if turn_ts.tzinfo is None:
                     turn_ts = turn_ts.replace(tzinfo=timezone.utc)
                 if turn_ts < stale_cutoff:
-                    active_turn.status = "aborted"
-                    active_turn.error_code = "STALE_TURN_REAPED"
-                    active_turn.updated_at = _now()
-                    thread.active_turn_id = None
-                    thread.latest_status = "aborted"
-                    thread.updated_at = _now()
-                    session.commit()
+                    if not finalize_turn_cas(
+                        session,
+                        turn_id=active_turn.id,
+                        new_status="aborted",
+                        error_code="STALE_TURN_REAPED",
+                        stale_before=stale_cutoff,
+                        commit=False,
+                    ):
+                        raise api_error(409, "THREAD_BUSY", "Conversation thread is active")
+                    reaped_turn_id = active_turn.id
+                    session.refresh(active_turn)
+                    session.refresh(thread)
                 else:
                     raise api_error(
                         409,
@@ -1009,6 +1029,8 @@ def append_user_turn_and_reserve_assistant(
         thread.updated_at = now
 
         session.commit()
+        if reaped_turn_id is not None:
+            _signal_turn_cancel_event(reaped_turn_id, reason="turn_revoked")
         session.refresh(thread)
         session.refresh(user_turn)
         session.refresh(assistant_turn)
@@ -1114,6 +1136,8 @@ def finalize_turn_cas(
     content: str | None = None,
     error_code: str | None = None,
     model: str | None = None,
+    stale_before: datetime | None = None,
+    commit: bool = True,
 ) -> bool:
     """Unique terminal-state writer for ``agent_conversation_turn`` (HC-32).
 
@@ -1156,10 +1180,19 @@ def finalize_turn_cas(
     for idx, value in enumerate(expected_from):
         params[f"exp_{idx}"] = value
 
+    lease_guard = ""
+    if stale_before is not None:
+        params["stale_before"] = stale_before
+        lease_guard = (
+            "AND updated_at < :stale_before "
+            "AND EXISTS (SELECT 1 FROM agent_conversation_thread "
+            "WHERE id = agent_conversation_turn.thread_id AND active_turn_id = :turn_id) "
+        )
     sql = (
         "UPDATE agent_conversation_turn "
         f"SET {', '.join(set_parts)} "
         f"WHERE id = :turn_id AND status IN ({placeholders}) "
+        f"{lease_guard}"
         "RETURNING id"
     )
     row = session.exec(sa_text(sql).bindparams(**params)).first()
@@ -1168,18 +1201,16 @@ def finalize_turn_cas(
     session.exec(
         sa_text(
             "UPDATE agent_conversation_thread "
-            "SET active_turn_id = CASE "
-            "        WHEN active_turn_id = :turn_id THEN NULL "
-            "        ELSE active_turn_id "
-            "    END, "
+            "SET active_turn_id = NULL, "
             "    latest_status = :new_status, "
             "    updated_at = :now "
             "WHERE id = ("
             "    SELECT thread_id FROM agent_conversation_turn WHERE id = :turn_id"
-            ")"
+            ") AND active_turn_id = :turn_id"
         ).bindparams(turn_id=turn_id, new_status=new_status, now=now)
     )
-    session.commit()
+    if commit:
+        session.commit()
     return True
 
 
@@ -1313,13 +1344,209 @@ def _load_origin_graph_node(
 ) -> GraphNode | None:
     if not origin_node_id:
         return None
-    return session.exec(
+    nodes = session.exec(
         select(GraphNode)
         .where(
             GraphNode.snapshot_id == snapshot_id,
             (GraphNode.id == origin_node_id) | (GraphNode.node_key == origin_node_id),
         )
-    ).first()
+    ).all()
+    exact = next((node for node in nodes if node.id == origin_node_id), None)
+    if exact is not None:
+        return exact
+    if len(nodes) > 1:
+        raise api_error(400, "INVALID_CONVERSATION_ORIGIN", "Origin node is ambiguous")
+    return nodes[0] if nodes else None
+
+
+@dataclass(frozen=True)
+class _ConversationOrigin:
+    snapshot: GraphSnapshot | None
+    node: GraphNode | None
+    branch: Branch | None
+    round_number: int | None
+
+
+def _conversation_branch_rounds(
+    session: Session, scenario_id: str, branch_id: str, cutoff: int | None,
+) -> BranchRoundSelection:
+    try:
+        return select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            requested_cutoff=cutoff,
+        )
+    except BranchLineageError as exc:
+        raise api_error(
+            400, "INVALID_CONVERSATION_ORIGIN", "Origin branch lineage is unavailable"
+        ) from exc
+
+
+def _resolve_conversation_origin(
+    session: Session,
+    *,
+    scenario_id: str,
+    origin_branch_id: str | None,
+    origin_round_number: int | None,
+    origin_node_id: str | None,
+    origin_node_type: str | None,
+) -> _ConversationOrigin:
+    """Resolve one authoritative coordinate for both new and restored threads.
+
+    Persisted graph IDs are canonicalized at creation. Read-time graph projections
+    use their durable branch/message/event authority; a missing graph node never
+    degrades to a client-supplied excerpt or an unrelated worldline.
+    """
+    branch = session.get(Branch, origin_branch_id) if origin_branch_id else None
+    if origin_branch_id and (branch is None or branch.scenario_id != scenario_id):
+        raise api_error(404, "BRANCH_NOT_FOUND", "Origin branch not found for scenario")
+    snapshot = _latest_causal_snapshot(session, scenario_id)
+    node = (
+        _load_origin_graph_node(
+            session, snapshot_id=snapshot.id, origin_node_id=origin_node_id,
+        )
+        if snapshot and origin_node_id else None
+    )
+    free_agent = False
+    if node is None and origin_node_id and origin_node_id.startswith("agent:"):
+        target_id = origin_node_id.removeprefix("agent:")
+        agent = session.exec(
+            select(Agent).where(Agent.id == target_id, Agent.scenario_id == scenario_id)
+        ).first()
+        scenario = session.get(Scenario, scenario_id)
+        parsed = scenario.parsed_context if scenario and isinstance(
+            scenario.parsed_context, dict
+        ) else {}
+        parsed_agents = parsed.get("agents", [])
+        persona = next((
+            item for item in parsed_agents
+            if isinstance(item, dict) and item.get("id") == target_id
+        ), None) if isinstance(parsed_agents, list) else None
+        if agent is not None or persona is not None:
+            free_agent = True
+            node = GraphNode(
+                id=origin_node_id, snapshot_id="", node_key=origin_node_id,
+                node_type="agent", label=agent.name if agent else str(persona.get("name", "")),
+                payload_json=json.dumps({
+                    "agent_name": agent.name if agent else persona.get("name"),
+                }),
+            )
+    if node is None and origin_node_id and (origin_node_type or "").startswith("faction_event:"):
+        event_type = origin_node_type.removeprefix("faction_event:")
+        stmt = select(FactionEvent).where(
+            FactionEvent.scenario_id == scenario_id,
+            FactionEvent.event_type == event_type,
+        )
+        if origin_node_id.startswith("faction-event:"):
+            stmt = stmt.where(FactionEvent.id == origin_node_id.removeprefix("faction-event:"))
+        else:
+            stmt = stmt.where(
+                (FactionEvent.actor_agent_id == origin_node_id)
+                | (FactionEvent.faction_key == origin_node_id)
+            )
+            if origin_round_number is not None:
+                stmt = stmt.where(FactionEvent.round_number == origin_round_number)
+            if branch is not None:
+                visible = _conversation_branch_rounds(session, scenario_id, branch.id, None)
+                allowed = {(row.branch_id, row.round_number) for row in visible.rounds}
+                candidates = session.exec(stmt).all()
+                candidates = [
+                    event for event in candidates
+                    if (event.branch_id, event.round_number) in allowed
+                ]
+            else:
+                candidates = session.exec(stmt.limit(2)).all()
+        if origin_node_id.startswith("faction-event:"):
+            candidates = session.exec(stmt.limit(2)).all()
+        if len(candidates) != 1:
+            raise api_error(404, "ORIGIN_NODE_NOT_FOUND", "Faction event is missing or ambiguous")
+        event = candidates[0]
+        actor = session.exec(select(Agent).where(
+            Agent.id == event.actor_agent_id, Agent.scenario_id == scenario_id,
+        )).first()
+        if actor is None:
+            raise api_error(404, "ORIGIN_NODE_NOT_FOUND", "Faction event actor is unavailable")
+        node = GraphNode(
+            id=f"faction-event:{event.id}", snapshot_id="", node_key=event.id,
+            node_type=origin_node_type, label=event.event_type, round_number=event.round_number,
+            payload_json=json.dumps({
+                "branch_id": event.branch_id, "agent_name": actor.name,
+                "faction_key": event.faction_key,
+                "event": _load_json_object(event.payload_json),
+                "caveat": "Derived affect proxy; not verified beliefs or relationships.",
+            }),
+        )
+    if node is None and snapshot and origin_node_id and origin_node_id.startswith(
+        ("outcome:", "legacy-event:")
+    ):
+        from app.services.causal_graph import (
+            _latest_source_node_for_outcome,
+            _load_orphan_fork_provenance,
+            _load_outcome_branches,
+        )
+
+        nodes = session.exec(select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)).all()
+        if origin_node_id.startswith("outcome:"):
+            outcome = next((row for row in _load_outcome_branches(session, scenario_id)
+                            if f"outcome:{row.id}" == origin_node_id), None)
+            if outcome is not None:
+                source = _latest_source_node_for_outcome(nodes, outcome.id)
+                node = GraphNode(
+                    id=origin_node_id, snapshot_id=snapshot.id, node_key=origin_node_id,
+                    node_type="outcome", label=outcome.title,
+                    round_number=source.round_number if source else None,
+                    payload_json=json.dumps({"branch_id": outcome.id, "insight": outcome.insight}),
+                )
+        else:
+            edges = session.exec(
+                select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
+            ).all()
+            projections, _ = _load_orphan_fork_provenance(
+                session, scenario_id=scenario_id, nodes=nodes, edges=edges,
+            )
+            projection = next((item for item in projections if item["id"] == origin_node_id), None)
+            if projection is not None:
+                node = GraphNode(
+                    id=origin_node_id, snapshot_id=snapshot.id, node_key=projection["key"],
+                    node_type=projection["type"], label=projection["label"],
+                    round_number=projection["round"],
+                    payload_json=json.dumps(projection["payload"]),
+                )
+    if origin_node_id and node is None:
+        raise api_error(404, "ORIGIN_NODE_NOT_FOUND", "Origin node not found for scenario")
+    if node is not None and origin_node_type and origin_node_type != node.node_type:
+        raise api_error(400, "INVALID_CONVERSATION_ORIGIN", "Origin node type does not match")
+    round_number = origin_round_number
+    if node is not None and not free_agent:
+        if round_number is not None and round_number != node.round_number:
+            raise api_error(400, "INVALID_CONVERSATION_ORIGIN", "Origin round does not match node")
+        round_number = node.round_number
+    payload = _load_json_object(node.payload_json) if node else {}
+    node_branch_id = payload.get("branch_id")
+    if not node_branch_id and node is not None and not free_agent and snapshot:
+        node_branch_id = snapshot.branch_id
+    if isinstance(node_branch_id, str) and node_branch_id:
+        node_branch = session.get(Branch, node_branch_id)
+        if node_branch is None or node_branch.scenario_id != scenario_id:
+            raise api_error(404, "BRANCH_NOT_FOUND", "Origin node branch not found for scenario")
+        if branch is None:
+            branch = node_branch
+        elif branch.id != node_branch.id:
+            selection = _conversation_branch_rounds(session, scenario_id, branch.id, round_number)
+            from app.services.causal_graph import _filter_nodes_for_branch_selection
+
+            if not _filter_nodes_for_branch_selection([node], selection):
+                raise api_error(400, "INVALID_CONVERSATION_ORIGIN", "Node is outside branch scope")
+    elif node is not None and not free_agent and branch is not None:
+        raise api_error(400, "INVALID_CONVERSATION_ORIGIN", "Node has no branch coordinate")
+    if node is None or free_agent:
+        if round_number is not None:
+            if branch is None or not _conversation_branch_rounds(
+                session, scenario_id, branch.id, round_number,
+            ).contains(round_number):
+                raise api_error(400, "INVALID_CONVERSATION_ORIGIN", "Origin round is unavailable")
+    return _ConversationOrigin(snapshot, node, branch, round_number)
 
 
 def _summarize_branch(branch: Branch | None) -> str | None:
@@ -1429,18 +1656,15 @@ def _summarize_round_transcripts(
 ) -> tuple[str, ...]:
     if not branch_id:
         return ()
-    stmt = select(Round).where(Round.branch_id == branch_id)
-    if origin_round_number is not None:
-        stmt = stmt.where(Round.round_number <= origin_round_number)
-    recent_rounds = list(
-        session.exec(
-            stmt.order_by(Round.round_number.desc(), Round.id.desc())
-            .limit(_PROMPT_ROUND_TRANSCRIPT_ROUNDS)
-        ).all()
+    branch = session.get(Branch, branch_id)
+    if branch is None:
+        return ()
+    selection = _conversation_branch_rounds(
+        session, branch.scenario_id, branch_id, origin_round_number,
     )
+    recent_rounds = selection.rounds[-_PROMPT_ROUND_TRANSCRIPT_ROUNDS:]
     if not recent_rounds:
         return ()
-    recent_rounds.reverse()
 
     summaries: list[str] = []
     for round_row in recent_rounds:
@@ -1495,35 +1719,23 @@ def _load_prompt_context(
     *,
     origin_excerpt: str | None = None,
 ) -> _PromptContext:
+    _verify_scenario_owner(session, thread.scenario_id, thread.owner_user_id or None)
     scenario = session.get(Scenario, thread.scenario_id)
     scenario_question = (
         _truncate_prompt_text(scenario.question, _PROMPT_SCENARIO_LIMIT)
         if scenario
         else None
     )
-    snapshot = _latest_causal_snapshot(session, thread.scenario_id)
-    node = _load_origin_graph_node(
+    origin = _resolve_conversation_origin(
         session,
-        snapshot_id=snapshot.id,
+        scenario_id=thread.scenario_id,
+        origin_branch_id=thread.origin_branch_id,
+        origin_round_number=thread.origin_round_number,
         origin_node_id=thread.origin_node_id,
-    ) if snapshot else None
-    node_payload = _load_json_object(node.payload_json if node else None)
-    branch_id = (
-        thread.origin_branch_id
-        or (
-            node_payload.get("branch_id")
-            if isinstance(node_payload.get("branch_id"), str)
-            else None
-        )
+        origin_node_type=thread.origin_node_type,
     )
-    branch = session.get(Branch, branch_id) if branch_id else None
-    if branch is not None and branch.scenario_id != thread.scenario_id:
-        # H1: cross-scenario branch leak guard — the originating branch belongs
-        # to a different scenario than this thread, so we MUST NOT fall back to
-        # the raw ``branch_id`` for the transcript summarizer (would expose
-        # foreign-scenario rounds in the prompt).  Drop the reference entirely.
-        branch = None
-        branch_id = None
+    snapshot, node, branch = origin.snapshot, origin.node, origin.branch
+    node_payload = _load_json_object(node.payload_json if node else None)
 
     agent_name, agent_role, agent_persona = None, None, None
     if scenario:
@@ -1579,7 +1791,7 @@ def _load_prompt_context(
         round_transcripts=_summarize_round_transcripts(
             session,
             branch_id=branch.id if branch is not None else None,
-            origin_round_number=thread.origin_round_number,
+            origin_round_number=origin.round_number,
         ),
         agent_name=agent_name,
         agent_role=agent_role,
@@ -1840,6 +2052,71 @@ def _load_turn_status(session: Session, turn_id: str) -> str | None:
     return row[0] if row else None
 
 
+def _refresh_stream_lease(
+    *, thread_id: str, turn_id: str, content: str | None = None,
+) -> bool:
+    """Check durable ownership on each delta; heartbeat writes are throttled by the caller."""
+    with Session(get_engine()) as session:
+        ownership = (
+            "id = :turn_id AND thread_id = :thread_id AND status = 'streaming' "
+            "AND EXISTS (SELECT 1 FROM agent_conversation_thread "
+            "WHERE id = :thread_id AND active_turn_id = :turn_id)"
+        )
+        if content is None:
+            row = session.exec(sa_text(
+                f"SELECT id FROM agent_conversation_turn WHERE {ownership}"
+            ).bindparams(turn_id=turn_id, thread_id=thread_id)).first()
+        else:
+            row = session.exec(sa_text(
+                "UPDATE agent_conversation_turn SET updated_at = :now, content = :content "
+                f"WHERE {ownership} RETURNING id"
+            ).bindparams(
+                turn_id=turn_id, thread_id=thread_id, now=_now(), content=content,
+            )).first()
+            session.commit()
+        return row is not None
+
+
+def _preserve_aborted_content(session: Session, turn_id: str, content: str) -> None:
+    """A remote reaper/abort may win before this worker flushes its emitted prefix."""
+    turn = session.get(AgentConversationTurn, turn_id)
+    if (
+        turn is not None and turn.status == "aborted"
+        and content.startswith(turn.content or "") and len(content) > len(turn.content or "")
+    ):
+        session.exec(sa_text(
+            "UPDATE agent_conversation_turn SET content = :content "
+            "WHERE id = :turn_id AND status = 'aborted' AND content = :previous"
+        ).bindparams(turn_id=turn_id, content=content, previous=turn.content or ""))
+        session.commit()
+
+
+def _terminal_turn_event(
+    *, thread_id: str, turn_id: str, sequence: int, model: str | None,
+    scenario_deleted: bool = False,
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        turn = session.get(AgentConversationTurn, turn_id)
+        status = "scenario_deleted" if scenario_deleted or turn is None else turn.status
+        code = "SCENARIO_DELETED" if status == "scenario_deleted" else turn.error_code
+        if status == "aborted":
+            code = code or "USER_ABORTED"
+        data = {
+            "turn_id": turn_id, "thread_id": thread_id, "sequence": sequence,
+            "status": "committed" if status == "done" else status,
+            "model": (turn.model if turn else None) or model or settings.LLM_MODEL_NAME,
+        }
+        if status != "done":
+            data.update(code=code, message=_map_error_message(code))
+        return {
+            "event": (
+                "turn_completed" if status == "done"
+                else "turn_aborted" if status == "aborted" else "turn_error"
+            ),
+            "data": data,
+        }
+
+
 async def stream_assistant_turn(
     *,
     thread_id: str,
@@ -1868,6 +2145,35 @@ async def stream_assistant_turn(
         stream_cancel_event = cancel_event or asyncio.Event()
         _register_turn_cancel_event(assistant_turn_id, stream_cancel_event)
         active_overrides = overrides
+        accumulated: list[str] = []
+        heartbeat_task: asyncio.Task[None] | None = None
+        last_heartbeat = _now()
+
+        def require_live_turn(*, heartbeat: bool = False) -> None:
+            nonlocal last_heartbeat
+            if _is_turn_cancel_requested(assistant_turn_id, stream_cancel_event):
+                raise asyncio.CancelledError
+            now = _now()
+            write = heartbeat or (now - last_heartbeat).total_seconds() >= _TURN_HEARTBEAT_SECONDS
+            if not _refresh_stream_lease(
+                thread_id=thread_id, turn_id=assistant_turn_id,
+                content="".join(accumulated) if write else None,
+            ):
+                _signal_turn_cancel_event(assistant_turn_id, reason="turn_revoked")
+                raise asyncio.CancelledError
+            if write:
+                last_heartbeat = now
+
+        async def heartbeat_loop() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(_TURN_HEARTBEAT_SECONDS)
+                    require_live_turn(heartbeat=True)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                _structured_log("agent_conversation.heartbeat_failed", error=str(exc))
+                _signal_turn_cancel_event(assistant_turn_id, reason="turn_revoked")
 
         try:
             # Hydrate thread + assistant turn + history in a short-lived session.
@@ -1930,7 +2236,14 @@ async def stream_assistant_turn(
                         },
                     }
                     return
-                if code == "BYOK_API_KEY_REQUIRED":
+                if code in {
+                    "BYOK_API_KEY_REQUIRED", "INVALID_CONVERSATION_ORIGIN",
+                    "ORIGIN_NODE_NOT_FOUND", "BRANCH_NOT_FOUND",
+                }:
+                    error_code = (
+                        "BYOK_DENIED" if code == "BYOK_API_KEY_REQUIRED"
+                        else "INVALID_CONVERSATION_ORIGIN"
+                    )
                     with Session(engine) as session:
                         finalize_turn_cas(
                             session,
@@ -1938,22 +2251,13 @@ async def stream_assistant_turn(
                             new_status="error",
                             expected_from=_CAS_EXPECTED_FROM_DEFAULT,
                             content="",
-                            error_code="BYOK_DENIED",
+                            error_code=error_code,
                             model=active_overrides.model,
                         )
-                    yield {
-                        "event": "turn_error",
-                        "data": {
-                            "turn_id": assistant_turn_id,
-                            "thread_id": thread_id,
-                            "sequence": assistant_turn.sequence,
-                            "status": "error",
-                            "model": active_overrides.model
-                            or settings.LLM_MODEL_NAME,
-                            "code": "BYOK_DENIED",
-                            "message": _map_error_message("BYOK_DENIED"),
-                        },
-                    }
+                    yield _terminal_turn_event(
+                        thread_id=thread_id, turn_id=assistant_turn_id,
+                        sequence=assistant_turn.sequence, model=active_overrides.model,
+                    )
                     return
                 raise
 
@@ -1987,8 +2291,11 @@ async def stream_assistant_turn(
                             "UPDATE agent_conversation_turn "
                             "SET status = 'streaming', updated_at = :now "
                             "WHERE id = :turn_id AND status = 'pending' "
+                            "AND thread_id = :thread_id "
+                            "AND EXISTS (SELECT 1 FROM agent_conversation_thread "
+                            "WHERE id = :thread_id AND active_turn_id = :turn_id) "
                             "RETURNING id"
-                        ).bindparams(turn_id=assistant_turn_id, now=now)
+                        ).bindparams(turn_id=assistant_turn_id, thread_id=thread_id, now=now)
                     ).first()
                     if claimed is None:
                         raise api_error(
@@ -2000,8 +2307,8 @@ async def stream_assistant_turn(
                         sa_text(
                             "UPDATE agent_conversation_thread "
                             "SET latest_status = 'streaming', updated_at = :now "
-                            "WHERE id = :thread_id"
-                        ).bindparams(thread_id=thread_id, now=now)
+                            "WHERE id = :thread_id AND active_turn_id = :turn_id"
+                        ).bindparams(thread_id=thread_id, turn_id=assistant_turn_id, now=now)
                     )
                     session.commit()
 
@@ -2022,6 +2329,10 @@ async def stream_assistant_turn(
                 }
                 return
             if current_status != "streaming":
+                yield _terminal_turn_event(
+                    thread_id=thread_id, turn_id=assistant_turn_id,
+                    sequence=assistant_turn.sequence, model=active_overrides.model,
+                )
                 return
             cancel_reason = _get_turn_cancel_reason(assistant_turn_id)
             if cancel_reason is not None or stream_cancel_event.is_set():
@@ -2049,7 +2360,13 @@ async def stream_assistant_turn(
                             error_code="USER_ABORTED",
                             model=active_overrides.model,
                         )
+                    yield _terminal_turn_event(
+                        thread_id=thread_id, turn_id=assistant_turn_id,
+                        sequence=assistant_turn.sequence, model=active_overrides.model,
+                    )
                 return
+
+            heartbeat_task = asyncio.create_task(heartbeat_loop())
 
             # Tell the client we're about to start only after the turn has been
             # claimed, so a duplicate bootstrap request cannot produce a second
@@ -2072,13 +2389,14 @@ async def stream_assistant_turn(
                 else (f"user:{quota_owner}" if quota_owner else None)
             )
 
-            accumulated: list[str] = []
-            aborted = False
             error_code: str | None = None
+            cancelled = False
             try:
+                require_live_turn(heartbeat=True)
                 with llm_request_scope(
                     quota_key=quota_key,
                     purpose="agent_conversation",
+                    reasoning_effort=active_overrides.reasoning_effort,
                     requests_per_minute=active_overrides.requests_per_minute,
                     tokens_per_minute=active_overrides.tokens_per_minute,
                     concurrency=active_overrides.concurrency,
@@ -2106,11 +2424,11 @@ async def stream_assistant_turn(
                             api_key=active_overrides.api_key,
                             base_url=active_overrides.base_url,
                             model=active_overrides.model,
-                            reasoning_effort="medium",
                             temperature=0.7,
                         )
 
                     async for delta in _stream_with_cancel_signal(stream, stream_cancel_event):
+                        require_live_turn()
                         if not delta:
                             continue
                         accumulated.append(delta)
@@ -2124,19 +2442,14 @@ async def stream_assistant_turn(
                                 or settings.LLM_MODEL_NAME,
                             },
                         }
+                    require_live_turn()
                     if not "".join(accumulated).strip():
-                        if _is_turn_cancel_requested(
-                            assistant_turn_id,
-                            stream_cancel_event,
-                        ):
-                            raise asyncio.CancelledError
                         fallback_text = await _await_with_turn_cancel_signal(
                             llm_call(
                                 prompt,
                                 api_key=active_overrides.api_key,
                                 base_url=active_overrides.base_url,
                                 model=active_overrides.model,
-                                reasoning_effort="medium",
                                 temperature=0.7,
                             ),
                             turn_id=assistant_turn_id,
@@ -2145,11 +2458,7 @@ async def stream_assistant_turn(
                         # HC race：abort_turn() 只 set cancel event、不 cancel 当前 task；
                         # fallback 也必须监听 cancel，并在返回后以同步写入的 cancel
                         # reason 再检查一次，避免已中止 turn 被 fallback 文本救成 done。
-                        if (
-                            stream_cancel_event.is_set()
-                            or _get_turn_cancel_reason(assistant_turn_id) is not None
-                        ):
-                            raise asyncio.CancelledError
+                        require_live_turn()
                         if fallback_text.strip():
                             accumulated[:] = [fallback_text]
                             yield {
@@ -2163,6 +2472,39 @@ async def stream_assistant_turn(
                                 },
                             }
             except asyncio.CancelledError:
+                cancelled = True
+            except LLMError as exc:
+                error_code = "LLM_5XX"
+                _structured_log(
+                    "agent_conversation.llm_error",
+                    owner_user_id=quota_owner or "",
+                    thread_id=thread_id,
+                    turn_id=assistant_turn_id,
+                    error=str(exc),
+                    request_id=request_id or "",
+                )
+            except asyncio.TimeoutError:
+                error_code = "STREAM_TIMEOUT"
+            except Exception as exc:  # noqa: BLE001 — defensive catchall
+                error_code = "LLM_5XX"
+                _structured_log(
+                    "agent_conversation.unexpected_error",
+                    owner_user_id=quota_owner or "",
+                    thread_id=thread_id,
+                    turn_id=assistant_turn_id,
+                    error=str(exc),
+                    request_id=request_id or "",
+                )
+
+            # A consumer can acknowledge an abort while paused at any delta
+            # yield, including the single non-stream fallback delta. Recheck at
+            # the shared commit boundary before choosing a terminal transition.
+            if not cancelled:
+                try:
+                    require_live_turn()
+                except asyncio.CancelledError:
+                    cancelled = True
+            if cancelled:
                 cancel_reason = _get_turn_cancel_reason(assistant_turn_id)
                 with Session(engine) as session:
                     terminal_status = _load_turn_status(session, assistant_turn_id)
@@ -2191,129 +2533,44 @@ async def stream_assistant_turn(
                         new_status="aborted",
                         expected_from=_CAS_EXPECTED_FROM_DEFAULT,
                         content="".join(accumulated),
-                        error_code="USER_ABORTED",
+                        error_code=(
+                            "TURN_REVOKED" if cancel_reason == "turn_revoked" else "USER_ABORTED"
+                        ),
                         model=active_overrides.model,
                     )
-                aborted = True
-                raise
-            except LLMError as exc:
-                error_code = "LLM_5XX"
-                _structured_log(
-                    "agent_conversation.llm_error",
-                    owner_user_id=quota_owner or "",
-                    thread_id=thread_id,
-                    turn_id=assistant_turn_id,
-                    error=str(exc),
-                    request_id=request_id or "",
+                    _preserve_aborted_content(session, assistant_turn_id, "".join(accumulated))
+                yield _terminal_turn_event(
+                    thread_id=thread_id, turn_id=assistant_turn_id,
+                    sequence=assistant_turn.sequence, model=active_overrides.model,
                 )
-            except asyncio.TimeoutError:
-                error_code = "STREAM_TIMEOUT"
-            except Exception as exc:  # noqa: BLE001 — defensive catchall
-                error_code = "LLM_5XX"
-                _structured_log(
-                    "agent_conversation.unexpected_error",
-                    owner_user_id=quota_owner or "",
-                    thread_id=thread_id,
-                    turn_id=assistant_turn_id,
-                    error=str(exc),
-                    request_id=request_id or "",
-                )
+                return
 
             full_text = "".join(accumulated)
             if error_code is None and not full_text.strip():
                 error_code = "LLM_EMPTY"
 
-            # Terminal transition: commit or error.  CAS determines whether the
-            # WS commit event is allowed to fire (HC-32).
+            # The durable winner determines this stream's one terminal event.
+            # A failed CAS still owes its own SSE consumer an aborted/error frame.
             with Session(engine) as session:
-                if aborted:
-                    # CancelledError path — router handles abort finalisation.
-                    return
-                if error_code is not None:
-                    committed = finalize_turn_cas(
-                        session,
-                        turn_id=assistant_turn_id,
-                        new_status="error",
-                        expected_from=_CAS_EXPECTED_FROM_DEFAULT,
-                        content=full_text,
-                        error_code=error_code,
-                        model=active_overrides.model,
-                    )
-                    if committed:
-                        yield {
-                            "event": "turn_error",
-                            "data": {
-                                "turn_id": assistant_turn_id,
-                                "thread_id": thread_id,
-                                "sequence": assistant_turn.sequence,
-                                "status": "error",
-                                "model": active_overrides.model
-                                or settings.LLM_MODEL_NAME,
-                                "code": error_code,
-                                "message": _map_error_message(error_code),
-                            },
-                        }
-                    else:
-                        # C2: distinguish scenario_deleted from other terminal
-                        # races (abort).  If the row is gone (cascade-deleted)
-                        # or its final status is ``scenario_deleted`` we owe the
-                        # client a terminal ``turn_error`` so the SSE cursor
-                        # does not hang half-finished.
-                        post_status = _load_turn_status(session, assistant_turn_id)
-                        if post_status is None or post_status == "scenario_deleted":
-                            yield {
-                                "event": "turn_error",
-                                "data": {
-                                    "turn_id": assistant_turn_id,
-                                    "thread_id": thread_id,
-                                    "sequence": assistant_turn.sequence,
-                                    "status": "scenario_deleted",
-                                    "model": active_overrides.model
-                                    or settings.LLM_MODEL_NAME,
-                                    "code": "SCENARIO_DELETED",
-                                    "message": _map_error_message("SCENARIO_DELETED"),
-                                },
-                            }
-                else:
-                    committed = finalize_turn_cas(
-                        session,
-                        turn_id=assistant_turn_id,
-                        new_status="done",
-                        expected_from=_CAS_EXPECTED_FROM_DEFAULT,
-                        content=full_text,
-                        error_code=None,
-                        model=active_overrides.model,
-                    )
-                    if committed:
-                        yield {
-                            "event": "turn_completed",
-                            "data": {
-                                "turn_id": assistant_turn_id,
-                                "thread_id": thread_id,
-                                "sequence": assistant_turn.sequence,
-                                "status": "committed",
-                                "model": active_overrides.model
-                                or settings.LLM_MODEL_NAME,
-                            },
-                        }
-                    else:
-                        # C2: same scenario_deleted detection on the success path.
-                        post_status = _load_turn_status(session, assistant_turn_id)
-                        if post_status is None or post_status == "scenario_deleted":
-                            yield {
-                                "event": "turn_error",
-                                "data": {
-                                    "turn_id": assistant_turn_id,
-                                    "thread_id": thread_id,
-                                    "sequence": assistant_turn.sequence,
-                                    "status": "scenario_deleted",
-                                    "model": active_overrides.model
-                                    or settings.LLM_MODEL_NAME,
-                                    "code": "SCENARIO_DELETED",
-                                    "message": _map_error_message("SCENARIO_DELETED"),
-                                },
-                            }
+                finalize_turn_cas(
+                    session,
+                    turn_id=assistant_turn_id,
+                    new_status="error" if error_code is not None else "done",
+                    expected_from=_CAS_EXPECTED_FROM_DEFAULT,
+                    content=full_text,
+                    error_code=error_code,
+                    model=active_overrides.model,
+                )
+                _preserve_aborted_content(session, assistant_turn_id, full_text)
+            yield _terminal_turn_event(
+                thread_id=thread_id, turn_id=assistant_turn_id,
+                sequence=assistant_turn.sequence, model=active_overrides.model,
+            )
         finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task
             _unregister_turn_cancel_event(assistant_turn_id, stream_cancel_event)
 
     return _iter()
@@ -2331,17 +2588,18 @@ def abort_turn(
     broadcast ``agent_conversation_turn_abort``); ``False`` when the row had
     already reached a terminal state by a race.
     """
-    # Prefer the live stream task as the terminal writer so any already
-    # emitted partial text is preserved on the aborted row.
-    if _signal_turn_cancel_event(turn_id, reason="user_aborted"):
-        return True
-
     engine = get_engine()
     with Session(engine) as session:
         thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
         turn = session.get(AgentConversationTurn, turn_id)
         if turn is None or turn.thread_id != thread.id:
             raise api_error(404, "TURN_NOT_FOUND", "Turn not found")
+        if turn.status in _ALLOWED_TERMINAL_STATES:
+            return False
+        # Verify ownership before touching the process-local registry. The live
+        # stream remains the writer so it can persist every already emitted token.
+        if _signal_turn_cancel_event(turn_id, reason="user_aborted"):
+            return True
         transitioned = finalize_turn_cas(
             session,
             turn_id=turn_id,

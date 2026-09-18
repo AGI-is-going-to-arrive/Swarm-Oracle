@@ -395,6 +395,7 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         request_api_key=overrides.get("api_key"),
         request_base_url=overrides.get("base_url"),
         request_model=overrides.get("model"),
+        request_reasoning_effort=overrides.get("reasoning_effort"),
         request_requests_per_minute=overrides.get("requests_per_minute"),
         request_tokens_per_minute=overrides.get("tokens_per_minute"),
         request_concurrency=overrides.get("concurrency"),
@@ -438,6 +439,7 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose="prediction_scoring",
+            reasoning_effort=effective_llm.reasoning_effort,
             requests_per_minute=effective_llm.requests_per_minute,
             tokens_per_minute=effective_llm.tokens_per_minute,
             concurrency=effective_llm.concurrency,
@@ -449,7 +451,7 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         ):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
-                reasoning_effort="low",
+                reasoning_effort=effective_llm.reasoning_effort,
                 model=effective_llm.model,
                 api_key=effective_llm.api_key,
                 base_url=effective_llm.base_url,
@@ -585,6 +587,7 @@ async def score_all_for_scenario(
         request_api_key=overrides.get("api_key"),
         request_base_url=overrides.get("base_url"),
         request_model=overrides.get("model"),
+        request_reasoning_effort=overrides.get("reasoning_effort"),
         request_requests_per_minute=overrides.get("requests_per_minute"),
         request_tokens_per_minute=overrides.get("tokens_per_minute"),
         request_concurrency=overrides.get("concurrency"),

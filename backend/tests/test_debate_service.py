@@ -1590,7 +1590,9 @@ async def test_phase_insight_enhancement_forwards_llm_overrides(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
+@pytest.mark.parametrize("explicit_effort", [None, "high"])
+async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch, explicit_effort):
+    monkeypatch.setattr(debate_module.settings, "LLM_REASONING_EFFORT", "low")
     monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
     captured: dict[str, object] = {}
     scopes: list[dict[str, object]] = []
@@ -1617,6 +1619,7 @@ async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
         speaker_side="proposition",
         llm_overrides={
             "model": "byok-model",
+            "reasoning_effort": explicit_effort,
             "api_key": "byok-key",
             "base_url": "https://byok.example/v1",
             "requests_per_minute": 37,
@@ -1629,11 +1632,13 @@ async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
     )
 
     assert "deadline" in reason
+    assert captured["reasoning_effort"] == explicit_effort
     assert captured["model"] == "byok-model"
     assert captured["api_key"] == "byok-key"
     assert captured["base_url"] == "https://byok.example/v1"
     assert scopes == [{
         "quota_key": None,
+        "reasoning_effort": explicit_effort or "low",
         "purpose": "debate_supporting_turn_reason",
         "requests_per_minute": 37,
         "tokens_per_minute": 3700,

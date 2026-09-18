@@ -426,10 +426,11 @@ async def compress_rounds(
     base_url: str | None = None,
     temperature: float | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> dict:
     """Compress multiple rounds of agent messages into a structured situation briefing.
 
-    Uses reasoning_effort=low to save tokens on summarization tasks.
+    Retains the operation's reasoning policy across both compression windows.
     Short-circuits on empty input to avoid wasting LLM calls.
 
     Returns:
@@ -464,6 +465,7 @@ async def compress_rounds(
             temperature=temperature,
             model=model,
             max_chars=_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS,
+            reasoning_effort=reasoning_effort,
         )
         return await _compress_round_window(
             recent_window,
@@ -474,6 +476,7 @@ async def compress_rounds(
             temperature=temperature,
             model=model,
             max_chars=_COMPRESS_RECENT_RAW_WINDOW_CHARS,
+            reasoning_effort=reasoning_effort,
         )
 
     logger.debug("Compressing %d chars of messages", total_chars)
@@ -486,6 +489,7 @@ async def compress_rounds(
         temperature=temperature,
         model=model,
         max_chars=_COMPRESS_MAX_RAW_WINDOW_CHARS,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -1332,6 +1336,7 @@ async def _compress_round_window(
     temperature: float | None,
     model: str | None,
     max_chars: int,
+    reasoning_effort: str | None = None,
 ) -> dict:
     prompt = _build_compress_prompt(
         language=language,
@@ -1349,7 +1354,7 @@ async def _compress_round_window(
             result = await asyncio.wait_for(
                 llm_call_json_with_stream_fallback(
                     prompt,
-                    reasoning_effort="low",
+                    reasoning_effort=reasoning_effort,
                     api_key=api_key,
                     base_url=base_url,
                     temperature=temperature,

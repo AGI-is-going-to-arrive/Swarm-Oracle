@@ -92,10 +92,30 @@ vi.mock('@xyflow/react', async () => {
 });
 
 vi.mock('../kg/NodeConversationSheet', () => ({
-  NodeConversationSheet: () => null,
+  NodeConversationSheet: ({ open }: { open: boolean }) => open ? <div data-testid="node-conversation-sheet" /> : null,
 }));
 
 import CausalGraphBoard from './CausalGraphBoard';
+
+it('inspects a causal node before explicitly opening its conversation', async () => {
+  hoisted.mockScenarioGraphReturn.data = { id: 'graph', nodes: [{ id: 'selected', key: 'selected', type: 'event', label: 'Selected event', round: 1, payload: null }], edges: [] };
+  const user = userEvent.setup();
+  const view = render(<CausalGraphBoard scenarioId="scenario" />);
+  await user.click(await screen.findByTestId('flow-node-selected'));
+  expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+  expect(screen.queryByTestId('node-conversation-sheet')).not.toBeInTheDocument();
+  await user.click(screen.getByTestId('node-detail-ask'));
+  expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
+  expect(screen.getByTestId('node-conversation-sheet')).toBeInTheDocument();
+  view.rerender(<CausalGraphBoard scenarioId="scenario" inspectionActive={false} />);
+  expect(screen.queryByTestId('node-conversation-sheet')).not.toBeInTheDocument();
+  view.rerender(<CausalGraphBoard scenarioId="scenario" inspectionActive />);
+  expect(screen.queryByTestId('node-conversation-sheet')).not.toBeInTheDocument();
+  await user.click(screen.getByTestId('flow-node-selected'));
+  await user.click(screen.getByTestId('node-detail-ask'));
+  view.rerender(<CausalGraphBoard scenarioId="other-scenario" />);
+  expect(screen.queryByTestId('node-conversation-sheet')).not.toBeInTheDocument();
+});
 
 afterEach(() => {
   cleanup();

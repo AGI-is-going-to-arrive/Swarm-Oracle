@@ -139,6 +139,8 @@ export function AgentPackDialog({ open, onClose, onImported }: AgentPackDialogPr
   const [error, setError] = useState<ImportError | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [importCommitted, setImportCommitted] = useState(false);
+  const [conflictedPayloads, setConflictedPayloads] = useState<readonly string[]>([]);
+  const conflictBlocked = pack !== null && conflictedPayloads.includes(JSON.stringify(pack));
   useFocusTrap(dialogRef, open);
 
   useEffect(() => {
@@ -152,6 +154,7 @@ export function AgentPackDialog({ open, onClose, onImported }: AgentPackDialogPr
     setError(null);
     setSubmitting(false);
     setImportCommitted(false);
+    setConflictedPayloads([]);
   }, [open]);
 
   const closeIfIdle = useCallback(() => {
@@ -181,12 +184,12 @@ export function AgentPackDialog({ open, onClose, onImported }: AgentPackDialogPr
   const ingestResult = useCallback((result: AgentPackValidationResult) => {
     if (result.ok) {
       setPack(result.pack);
-      setError(null);
+      setError(conflictedPayloads.includes(JSON.stringify(result.pack)) ? 'conflict' : null);
       return;
     }
     setPack(null);
     setError(result.error);
-  }, []);
+  }, [conflictedPayloads]);
 
   const handlePasteChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
     if (importCommittedRef.current) return;
@@ -224,7 +227,8 @@ export function AgentPackDialog({ open, onClose, onImported }: AgentPackDialogPr
 
   const handleSubmit = useCallback(async (event: FormEvent) => {
     event.preventDefault();
-    if (!pack || requestInFlightRef.current || importCommittedRef.current) return;
+    if (!pack || requestInFlightRef.current || importCommittedRef.current
+      || conflictedPayloads.includes(JSON.stringify(pack))) return;
     requestInFlightRef.current = true;
     ingestEpochRef.current += 1;
     setSubmitting(true);
@@ -233,7 +237,13 @@ export function AgentPackDialog({ open, onClose, onImported }: AgentPackDialogPr
     try {
       response = await importAgentPack(pack);
     } catch (caught) {
-      setError(mapImportError(caught));
+      const nextError = mapImportError(caught);
+      if (nextError === 'conflict') {
+        const importKey = JSON.stringify(pack);
+        setConflictedPayloads((current) => current.includes(importKey)
+          ? current : [...current, importKey]);
+      }
+      setError(nextError);
       requestInFlightRef.current = false;
       setSubmitting(false);
       return;
@@ -250,7 +260,7 @@ export function AgentPackDialog({ open, onClose, onImported }: AgentPackDialogPr
       requestInFlightRef.current = false;
       setSubmitting(false);
     }
-  }, [onClose, onImported, pack]);
+  }, [conflictedPayloads, onClose, onImported, pack]);
 
   const errorMessage = useMemo(() => {
     if (!error) return null;
@@ -264,7 +274,7 @@ export function AgentPackDialog({ open, onClose, onImported }: AgentPackDialogPr
       too_large: t('agent_pack.too_large', 'Agent Pack files must be 256 KiB or smaller.'),
       conflict: t(
         'agent_pack.conflict',
-        'No agents were imported because this pack conflicts with your library.',
+        'No agents were imported because this pack conflicts with your library. Choose a different pack or change its content before trying again.',
       ),
       unavailable: t(
         'agent_pack.unavailable',
@@ -451,7 +461,7 @@ export function AgentPackDialog({ open, onClose, onImported }: AgentPackDialogPr
             <button
               type="submit"
               className="agent-button agent-button--primary"
-              disabled={contentLocked || pack === null}
+              disabled={contentLocked || pack === null || conflictBlocked}
               aria-busy={submitting}
             >
               {importCommitted

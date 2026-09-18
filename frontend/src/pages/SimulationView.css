@@ -11,6 +11,35 @@
   overflow: hidden;
 }
 
+.sim-context-disclosure {
+  flex: 0 0 auto;
+  min-width: 0;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sim-context-disclosure > summary {
+  min-height: 44px;
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sim-context-disclosure > summary:hover {
+  background: var(--bg-surface);
+}
+
+.sim-context-disclosure > summary:focus-visible {
+  outline: 2px solid var(--color-primary, #c61583);
+  outline-offset: -3px;
+}
+
+.sim-context-disclosure[open] > summary {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
 /* ── Header ──────────────────────────────────────────────── */
 .sim-header {
   display: flex;
@@ -470,12 +499,15 @@
   --lt-red: #C5283D;
   --lt-purple: #7B2D8E;
   --lt-dot: rgba(209, 205, 199, 0.52);
-  --theater-toolbar-safe-area: 0px;
   position: relative;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  gap: 12px;
+  padding: 12px 16px;
+  height: auto;
+  flex: 1 0 auto;
   color: var(--lt-text);
   background: var(--lt-bg);
   background-image:
@@ -489,17 +521,19 @@
 }
 
 .theater-panel__game-wrapper {
-  position: absolute;
-  top: var(--theater-toolbar-safe-area);
-  left: 0;
-  right: 0;
-  bottom: var(--sim-theater-bottom-clearance);
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: calc(clamp(300px, 48vh, 560px) * 16 / 9);
+  width: calc(clamp(300px, 48dvh, 560px) * 16 / 9);
+  max-width: 100%;
+  min-width: 0;
+  aspect-ratio: 16 / 9;
   z-index: 1;
   box-shadow:
     inset 0 0 0 1px rgba(184, 179, 172, 0.62),
     inset 0 28px 72px rgba(24, 22, 17, 0.16),
     0 20px 52px rgba(24, 22, 17, 0.12);
-  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -572,12 +606,21 @@
 }
 
 .simulation-view--theater .theater-panel .theater-floating-toolbar {
+  position: relative;
+  inset: auto;
+  flex: none;
+  min-width: 0;
   color: var(--lt-text);
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid var(--lt-border);
   box-shadow:
     0 16px 36px rgba(24, 22, 17, 0.14),
     inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+/* Keep mobile visually-hidden labels inside their scrolling button row. */
+.theater-panel .theater-floating-toolbar .btn--capture {
+  position: relative;
 }
 
 @supports ((backdrop-filter: blur(14px)) or (-webkit-backdrop-filter: blur(14px))) {
@@ -748,7 +791,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin: auto 12px 0;
+  flex: none;
+  margin: 0;
   position: relative;
   z-index: 10;
   background: rgba(255, 255, 255, 0.82);
@@ -887,7 +931,8 @@
 
 .theater-panel__timeline {
   width: auto;
-  margin: 0 12px 12px;
+  flex: none;
+  margin: 0;
   position: relative;
   z-index: 10;
   background: rgba(255, 255, 255, 0.82);
@@ -1154,10 +1199,6 @@
 }
 
 @media (max-width: 520px) {
-  .theater-panel {
-    --theater-toolbar-safe-area: 224px;
-  }
-
   .theater-panel__director-goals {
     grid-template-columns: 1fr;
   }
@@ -1193,10 +1234,6 @@
 
   .theater-panel__status {
     margin-bottom: 4px;
-  }
-
-  .simulation-view--theater .sim-content__tree {
-    min-height: 60svh;
   }
 
   .simulation-view--theater .sim-content__panel {
@@ -1255,6 +1292,9 @@
 
 /* Root modifier when Theater mode is active. */
 .simulation-view--theater {
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: var(--sim-pipeline-total-h, 0px);
   background: #faf8f5;
   background-image:
     radial-gradient(circle, rgba(209, 205, 199, 0.42) 0.8px, transparent 0.8px),
@@ -1277,7 +1317,15 @@
 }
 
 .simulation-view--theater .sim-content {
+  flex: 1 0 auto;
   min-height: 0;
+  overflow: visible;
+}
+
+.simulation-view--theater > .intervention-receipt-card,
+.simulation-view--theater > .sim-error,
+.simulation-view--theater > .sim-cancelled {
+  flex-shrink: 0;
 }
 
 /* ── Header → Light Theater ──────────────────────────────── */
@@ -1335,6 +1383,7 @@
 /* ── Theater layout ratio: prioritize the stage, keep the sidebar bounded ─────── */
 .simulation-view--theater .sim-content__tree {
   flex: 1 1 auto;
+  display: flex;
   min-width: 0;
   min-height: 0;
 }
@@ -1352,20 +1401,6 @@
   max-width: 0;
 }
 
-.simulation-view--theater.simulation-view--replay-ready {
-  overflow: hidden;
-}
-
-.simulation-view--theater.simulation-view--replay-ready .sim-content {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.simulation-view--theater.simulation-view--replay-ready .sim-content__tree,
-.simulation-view--theater.simulation-view--replay-ready .sim-content__panel {
-  min-height: 0;
-}
-
 /* ── Scrollbar in Light Theater ──────────────────────────── */
 .simulation-view--theater ::-webkit-scrollbar-track {
   background: #f2eee7;
@@ -1379,16 +1414,35 @@
 
 /* ── Theater responsive ──────────────────────────────────── */
 @media (max-width: 900px) {
+  .theater-panel {
+    gap: 8px;
+    padding:
+      10px
+      calc(10px + env(safe-area-inset-right, 0px))
+      calc(10px + env(safe-area-inset-bottom, 0px))
+      calc(10px + env(safe-area-inset-left, 0px));
+  }
+
+  .theater-panel__game-wrapper {
+    width: calc(clamp(200px, 32vh, 360px) * 16 / 9);
+    width: calc(clamp(200px, 32dvh, 360px) * 16 / 9);
+  }
+
   .simulation-view--theater .sim-content__tree,
   .simulation-view--theater .sim-content__panel {
     flex: none;
     width: auto;
   }
   .simulation-view--theater .sim-content__tree {
-    min-height: 62vh;
+    min-height: 0;
   }
   .simulation-view--theater .sim-content__panel {
+    min-width: 0;
+    max-width: none;
+    height: 32vh;
+    height: 32dvh;
     max-height: 32vh;
+    max-height: 32dvh;
     border-left: none;
     border-top: 1px solid #d1cdc7;
   }

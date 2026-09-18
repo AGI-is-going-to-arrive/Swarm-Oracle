@@ -122,7 +122,13 @@ export default function AgentRoster({
 
       {/* ── Phase 3 Live-Only Integration ────────────────── */}
       {isWorkbenchMode && id && !isReplayMode && (
-        <section className="result-extension-section">
+        <section
+          id="result-counterfactual"
+          className="result-extension-section"
+          data-scenario-id={id}
+          tabIndex={-1}
+          aria-label={t('result.change_editor_title')}
+        >
           {scenario?.status === 'done' && capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
             <>
               <CounterfactualBrand

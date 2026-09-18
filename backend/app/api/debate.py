@@ -54,6 +54,7 @@ from app.services.debate_lifecycle import cancel_debate_record, delete_debate_re
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 from app.services.llm_client import (
     is_local_provider_url,
+    resolve_reasoning_effort,
     safe_llm_error_payload,
     validate_llm_base_url,
 )
@@ -826,6 +827,8 @@ def _build_debate_run_config(
     overrides_by_side: dict[str, dict[str, Any]] | None,
     server_binding: dict[str, Any],
     captured_profiles: dict[str, _CapturedDebateProfile],
+    *,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     explicit = any((req.llm_api_key, req.llm_base_url, req.llm_model))
     providers = {}
@@ -840,7 +843,9 @@ def _build_debate_run_config(
         }
     return {
         "version": 1, "providers": providers,
-        "reasoning_effort": req.reasoning_effort,
+        "reasoning_effort": resolve_reasoning_effort(
+            reasoning_effort if reasoning_effort is not None else req.reasoning_effort
+        ),
         "custom_agent_ids": req.custom_agent_ids or [],
     }
 
@@ -927,6 +932,7 @@ async def _create_debate_from_request(
     server_binding_override: dict[str, Any] | None = None,
     captured_profiles_override: dict[str, _CapturedDebateProfile] | None = None,
 ) -> dict[str, Any]:
+    effective_reasoning_effort = resolve_reasoning_effort(req.reasoning_effort)
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal) or "anonymous"
     request_payload = req.model_dump(mode="json")
     if not req.profile_confirmation_tokens:
@@ -996,7 +1002,7 @@ async def _create_debate_from_request(
                         capture_by_id[profile_id] = captured
                 captured_profiles[side] = captured
                 llm_overrides_by_side[side] = _debate_policy_to_overrides(
-                    captured.policy, reasoning_effort=req.reasoning_effort,
+                    captured.policy, reasoning_effort=effective_reasoning_effort,
                 )
 
     if req.custom_agent_ids and not settings.FEATURE_CUSTOM_AGENTS:
@@ -1040,6 +1046,7 @@ async def _create_debate_from_request(
     server_binding = server_binding_override or server_binding
     run_config = _build_debate_run_config(
         req, llm_overrides_by_side, server_binding, captured_profiles,
+        reasoning_effort=effective_reasoning_effort,
     )
     debate, created = await asyncio.to_thread(
         create_debate_record_with_receipt,
@@ -1066,7 +1073,7 @@ async def _create_debate_from_request(
         ),
         "base_url": req.llm_base_url or server_binding["base_url"],
         "model": req.llm_model or server_binding["model"],
-        "reasoning_effort": req.reasoning_effort,
+        "reasoning_effort": effective_reasoning_effort,
         "requests_per_minute": req.llm_requests_per_minute,
         "tokens_per_minute": req.llm_tokens_per_minute,
     }

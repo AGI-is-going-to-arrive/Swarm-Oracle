@@ -683,6 +683,8 @@ class ScenarioResponse(BaseModel):
     estimated_tokens_per_round: int | None = None
     estimated_total_tokens: int | None = None
     context_safety: str | None = None
+    # Scoped configuration hint; no provider request or credential is exposed.
+    conversation_llm_configured: bool | None = None
     mode: str | None = None
     hierarchical: bool = False  # P3-A
     # V2: Pixel visualization

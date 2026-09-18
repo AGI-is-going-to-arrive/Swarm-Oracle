@@ -11,8 +11,12 @@ from sqlalchemy import distinct, func
 from sqlmodel import select
 
 from app.api.errors import api_error
-from app.config import settings
-from app.services.llm_client import is_local_provider_url, normalize_native_search_upstream
+from app.config import is_placeholder_llm_api_key, is_static_llm_configured, settings
+from app.services.llm_client import (
+    is_local_provider_url,
+    normalize_native_search_upstream,
+    resolve_reasoning_effort,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,7 @@ class ResolvedLlmCallConfig:
     api_key: str | None
     base_url: str | None
     model: str | None
+    reasoning_effort: str | None
     requests_per_minute: int | None
     tokens_per_minute: int | None
     concurrency: int | None
@@ -289,6 +294,7 @@ def resolve_post_completion_llm_call_config(
     request_api_key: str | None = None,
     request_base_url: str | None = None,
     request_model: str | None = None,
+    request_reasoning_effort: str | None = None,
     request_requests_per_minute: int | None = None,
     request_tokens_per_minute: int | None = None,
     request_concurrency: int | None = None,
@@ -303,6 +309,11 @@ def resolve_post_completion_llm_call_config(
     inherited_api_key = _clean_optional_text(context.get("llm_api_key"))
     inherited_base_url = _clean_optional_text(context.get("llm_base_url"))
     inherited_model = _clean_optional_text(context.get("llm_model"))
+    effective_reasoning_effort = resolve_reasoning_effort(
+        request_reasoning_effort
+        if request_reasoning_effort is not None
+        else _clean_optional_text(context.get("reasoning_effort"))
+    )
 
     has_any_explicit_provider = any(
         value is not None
@@ -409,6 +420,7 @@ def resolve_post_completion_llm_call_config(
             api_key=None,
             base_url=None,
             model=explicit_model,
+            reasoning_effort=effective_reasoning_effort,
             requests_per_minute=request_requests_per_minute,
             tokens_per_minute=request_tokens_per_minute,
             concurrency=request_concurrency,
@@ -426,6 +438,7 @@ def resolve_post_completion_llm_call_config(
         api_key=explicit_api_key,
         base_url=explicit_base_url or inherited_base_url,
         model=explicit_model or inherited_model,
+        reasoning_effort=effective_reasoning_effort,
         requests_per_minute=(
             request_requests_per_minute
             if request_requests_per_minute is not None
@@ -449,4 +462,40 @@ def resolve_post_completion_llm_call_config(
         supports_native_search_override=effective_supports_native_search,
         native_search_upstream_override=effective_native_search_upstream,
         inherit_context_policy=inherit_provider_policy,
+    )
+
+
+def conversation_llm_is_configured(session: Any, scenario: Any) -> bool:
+    """Inspect this owned scenario's binding without contacting a provider.
+
+    This is configuration readiness, not a health check. A complete request-level
+    BYOK binding can still make a conversation usable when this returns false.
+    """
+    context = getattr(scenario, "parsed_context", None)
+    context = context if isinstance(context, Mapping) else {}
+    recovered = recover_profile_provider_overrides(session, scenario)
+    if model_profile_provider_unresolved(scenario, recovered):
+        return False
+    overrides = merge_profile_provider_overrides(None, recovered)
+    try:
+        resolved = resolve_post_completion_llm_call_config(
+            parsed_context=context,
+            request_api_key=overrides.get("api_key"),
+            request_base_url=overrides.get("base_url"),
+            request_model=overrides.get("model"),
+        )
+    except Exception:
+        # Readiness must not make an otherwise readable saved scenario fail.
+        logger.warning("Conversation provider binding is unavailable", exc_info=False)
+        return False
+    if not _clean_optional_text(resolved.model or settings.LLM_MODEL_NAME):
+        return False
+    if resolved.base_url:
+        return is_local_provider_url(resolved.base_url) or bool(resolved.api_key)
+    return is_static_llm_configured(
+        base_url=settings.LLM_RESPONSES_URL,
+        api_key=settings.LLM_API_KEY,
+    ) and (
+        is_local_provider_url(settings.LLM_RESPONSES_URL)
+        or not is_placeholder_llm_api_key(settings.LLM_API_KEY)
     )

@@ -284,6 +284,14 @@ export default function WorldlineRoundtableView() {
   const [importingReplay, setImportingReplay] = useState(false);
   const [importError, setImportError] = useState('');
   const [briefCopied, setBriefCopied] = useState(false);
+  const copyFeedbackTimersRef = useRef<Record<'brief' | 'permalink' | 'local', number | null>>({
+    brief: null,
+    permalink: null,
+    local: null,
+  });
+  const copyFeedbackEpochRef = useRef(0);
+  const copyFeedbackActiveRef = useRef(false);
+  const savedLocalCopyRef = useRef<string | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [showPostVerdict, setShowPostVerdict] = useState(false);
   const [postVerdictTab, setPostVerdictTab] = useState<PostVerdictTab>('agent_chat');
@@ -356,6 +364,46 @@ export default function WorldlineRoundtableView() {
   );
   const effectiveSnapshot = replaySnapshot ?? snapshot;
   const effectiveResult = replayPayload?.roomResult ?? result;
+
+  const isCurrentCopy = useCallback((epoch: number): boolean => (
+    copyFeedbackActiveRef.current && copyFeedbackEpochRef.current === epoch
+  ), []);
+  const showCopyFeedback = useCallback((
+    kind: 'brief' | 'permalink' | 'local',
+    epoch: number,
+  ): void => {
+    if (!isCurrentCopy(epoch)) return;
+    const timer = copyFeedbackTimersRef.current[kind];
+    if (timer !== null) window.clearTimeout(timer);
+    const setCopied = { brief: setBriefCopied, permalink: setPermalinkCopied, local: setLocalCopySaved }[kind];
+    setCopied(true);
+    copyFeedbackTimersRef.current[kind] = window.setTimeout(() => {
+      copyFeedbackTimersRef.current[kind] = null;
+      if (isCurrentCopy(epoch)) setCopied(false);
+    }, 1800);
+  }, [isCurrentCopy]);
+
+  useLayoutEffect(() => {
+    copyFeedbackEpochRef.current += 1;
+    copyFeedbackActiveRef.current = true;
+    setBriefCopied(false);
+    setPermalinkCopied(false);
+    setLocalCopySaved(false);
+    const savedLocalCopyId = savedLocalCopyRef.current;
+    savedLocalCopyRef.current = null;
+    if (replayLocalId && savedLocalCopyId === replayLocalId) {
+      showCopyFeedback('local', copyFeedbackEpochRef.current);
+    }
+    const timers = copyFeedbackTimersRef.current;
+    return () => {
+      copyFeedbackActiveRef.current = false;
+      copyFeedbackEpochRef.current += 1;
+      for (const key of ['brief', 'permalink', 'local'] as const) {
+        if (timers[key] !== null) window.clearTimeout(timers[key]);
+        timers[key] = null;
+      }
+    };
+  }, [id, replayShareId, replayLocalId, effectiveSnapshot?.id, showCopyFeedback]);
   const prevEffectiveResultRef = useRef(effectiveResult);
   useEffect(() => {
     if (prevEffectiveResultRef.current !== effectiveResult) {
@@ -1128,10 +1176,10 @@ export default function WorldlineRoundtableView() {
 
   const handleCopyBrief = useCallback(async () => {
     if (!meetingBrief) return;
+    const epoch = copyFeedbackEpochRef.current;
     await copyText(meetingBrief);
-    setBriefCopied(true);
-    window.setTimeout(() => setBriefCopied(false), 1800);
-  }, [meetingBrief]);
+    showCopyFeedback('brief', epoch);
+  }, [meetingBrief, showCopyFeedback]);
 
   const renderSummaryActions = (className = 'worldline-roundtable-summary__actions') => (
     <div className={className}>
@@ -1274,13 +1322,11 @@ export default function WorldlineRoundtableView() {
   );
 
   const handleCopyPermalink = useCallback(async () => {
-    const copyWindowMs = 1800;
+    const epoch = copyFeedbackEpochRef.current;
     const finalizeCopyState = (usedLocalFallback: boolean) => {
-      setPermalinkCopied(true);
-      window.setTimeout(() => setPermalinkCopied(false), copyWindowMs);
+      showCopyFeedback('permalink', epoch);
       if (usedLocalFallback) {
-        setLocalCopySaved(true);
-        window.setTimeout(() => setLocalCopySaved(false), copyWindowMs);
+        showCopyFeedback('local', epoch);
       }
     };
 
@@ -1292,6 +1338,7 @@ export default function WorldlineRoundtableView() {
         buildRoundtableReplayArtifactPayload(sanitizedReplayPayload),
         effectiveSnapshot?.scenario_id,
       ).catch(() => null);
+      if (!isCurrentCopy(epoch)) return;
       let permalink: string;
       let usedLocalFallback = false;
       if (artifact) {
@@ -1303,16 +1350,17 @@ export default function WorldlineRoundtableView() {
       } else {
         permalink = await buildOracleReplayUrl(window.location.origin, sanitizedReplayPayload);
       }
+      if (!isCurrentCopy(epoch)) return;
       await copyText(permalink);
       finalizeCopyState(usedLocalFallback);
     } catch (error) {
-      if (!effectiveReplayPayload) return;
+      if (!effectiveReplayPayload || !isCurrentCopy(epoch)) return;
       console.warn('[WorldlineRoundtableView] Falling back to local roundtable replay copy', error);
       const localId = saveOracleReplayLocalCopy(effectiveReplayPayload);
       await copyText(buildOracleReplayLocalUrl(window.location.origin, effectiveReplayPayload, localId));
       finalizeCopyState(true);
     }
-  }, [effectiveReplayPayload, effectiveSnapshot?.scenario_id]);
+  }, [effectiveReplayPayload, effectiveSnapshot?.scenario_id, isCurrentCopy, showCopyFeedback]);
 
   const automationInteractionMode = replayPayload
     ? (activeThread?.mode === 'followup'
@@ -1322,11 +1370,12 @@ export default function WorldlineRoundtableView() {
 
   const handleSaveLocalCopy = useCallback(() => {
     if (!effectiveReplayPayload) return;
+    const epoch = copyFeedbackEpochRef.current;
     const localId = saveOracleReplayLocalCopy(effectiveReplayPayload);
+    savedLocalCopyRef.current = localId;
     navigate(`/roundtable/replay?roomLocal=${localId}`, { replace: true });
-    setLocalCopySaved(true);
-    window.setTimeout(() => setLocalCopySaved(false), 1800);
-  }, [effectiveReplayPayload, navigate]);
+    showCopyFeedback('local', epoch);
+  }, [effectiveReplayPayload, navigate, showCopyFeedback]);
 
   const handleImportReplay = useCallback(async () => {
     if (!replayPayload?.scenarioReplay || importingReplay) return;

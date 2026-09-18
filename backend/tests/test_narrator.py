@@ -1,7 +1,9 @@
 """Tests for app.services.narrator — Stage 3 narration (mocked LLM)."""
 
+import json
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 import app.services.narrator as narrator_module
@@ -542,15 +544,18 @@ class TestNarrateBranch:
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
     @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
-    async def test_reasoning_effort_medium_for_pass1(self, mock_extract, mock_llm_pass1):
-        """Pass-1 narration should use medium reasoning effort for quality."""
+    @pytest.mark.parametrize("effort", [None, "low", "high", "none"])
+    async def test_reasoning_effort_shared_by_both_passes(
+        self, mock_extract, mock_llm_pass1, effort,
+    ):
+        """Narration and extraction retain the operation policy."""
         mock_llm_pass1.return_value = "A test narrative."
         mock_extract.return_value = {"story": "s", "insight": "i", "key_moments": []}
 
-        await narrate_branch("t", 0.5, "", "")
+        await narrate_branch("t", 0.5, "", "", reasoning_effort=effort)
 
-        _, kwargs = mock_llm_pass1.call_args
-        assert kwargs.get("reasoning_effort") == "medium"
+        assert mock_llm_pass1.call_args.kwargs["reasoning_effort"] == effort
+        assert mock_extract.call_args.kwargs["reasoning_effort"] == effort
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
@@ -928,3 +933,36 @@ class TestBuildFallbackNarrationQuestionAnchoring:
 
         assert "Y" * 300 in result["story"]
         assert "Y" * 301 not in result["story"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", [None, "low", "high", "none"])
+async def test_narration_and_extraction_use_same_wire_policy(monkeypatch, selected):
+    from app.services import llm_client
+
+    payloads = []
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        result = "The council kept its review process open."
+        if len(payloads) > 1:
+            result = json.dumps({
+                "story": result, "insight": "Review continues.", "key_moments": [],
+            })
+        return httpx.Response(200, json={"choices": [{"message": {"content": result}}]})
+
+    monkeypatch.setattr(llm_client.settings, "LLM_REASONING_EFFORT", "low")
+    monkeypatch.setattr(llm_client, "probe_streaming_support", AsyncMock(
+        return_value={"supported": False},
+    ))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: client)
+        result = await narrate_branch(
+            "Review", 1.0, "A councillor", "[R1] Keep review open.", language="English",
+            reasoning_effort=selected, base_url="http://127.0.0.1:8317/v1/chat/completions",
+            model="narration-model",
+        )
+    assert result["story"] == "The council kept its review process open."
+    assert len(payloads) == 2
+    expected = None if selected == "none" else selected or "low"
+    assert [payload.get("reasoning_effort") for payload in payloads] == [expected, expected]

@@ -11,6 +11,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from 'react';
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -128,6 +129,26 @@ import './SimulationView.css';
 
 function SimulationSlotFallback({ label }: { label: string }) {
   return <div className="sim-slot-fallback">{label}</div>;
+}
+
+function SimulationContextDisclosure({
+  enabled,
+  label,
+  kind,
+  children,
+}: {
+  enabled: boolean;
+  label: string;
+  kind: 'world' | 'history';
+  children: ReactNode;
+}): ReactNode {
+  if (!enabled) return children;
+  return (
+    <details className="sim-context-disclosure" data-context={kind}>
+      <summary>{label}</summary>
+      {children}
+    </details>
+  );
 }
 
 interface SimulationAutomationRouteIntent {
@@ -1928,13 +1949,25 @@ function SimulationViewContent({
         </Suspense>
       )}
 
-      <DomainWorldStrip
-        domainWorld={domainWorld}
-        branchId={activeBranches[0]?.id ?? branches[0]?.id ?? null}
-        readOnly={false}
-      />
+      <SimulationContextDisclosure
+        enabled={viewMode === 'theater'}
+        label={t('domain_world.title')}
+        kind="world"
+      >
+        <DomainWorldStrip
+          domainWorld={domainWorld}
+          branchId={activeBranches[0]?.id ?? branches[0]?.id ?? null}
+          readOnly={false}
+        />
+      </SimulationContextDisclosure>
 
       {showRecovery && (
+        <SimulationContextDisclosure
+          enabled={viewMode === 'theater' && Boolean(snapshotImport)
+            && !cancelledStatus && status !== 'error' && !error}
+          label={t('simulation.snapshot_import_title')}
+          kind="history"
+        >
         <section
           className={cancelledStatus ? 'sim-cancelled' : 'sim-error sim-error--soft'}
           role={status === 'error' || error ? 'alert' : 'status'}
@@ -1977,6 +2010,7 @@ function SimulationViewContent({
             </div>
           </div>
         </section>
+        </SimulationContextDisclosure>
       )}
 
       {isReplayMode && (

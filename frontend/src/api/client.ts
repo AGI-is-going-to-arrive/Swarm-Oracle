@@ -30,6 +30,7 @@ import type {
 import { getOrgId } from '../lib/orgContext';
 
 const BASE = '/api';
+export const SESSION_TOKEN_CHANGED_EVENT = 'swarmoracle:session-token-changed';
 
 /**
  * Session token for optional server-side auth gate (SESSION_SECRET).
@@ -44,13 +45,19 @@ export function getSessionToken(): string {
 }
 
 export function setSessionToken(token: string): void {
+  const previousToken = getSessionToken();
   try {
     if (token) {
       localStorage.setItem('swarmoracle_session_token', token);
     } else {
       localStorage.removeItem('swarmoracle_session_token');
     }
-  } catch { /* ignore */ }
+  } catch { return; }
+  if (getSessionToken() !== previousToken && typeof window !== 'undefined') {
+    // Same-tab storage writes do not emit StorageEvent. Never put credentials
+    // in the notification; subscribers read the current session themselves.
+    window.dispatchEvent(new Event(SESSION_TOKEN_CHANGED_EVENT));
+  }
 }
 
 function decodeBase64Url(segment: string): string | null {

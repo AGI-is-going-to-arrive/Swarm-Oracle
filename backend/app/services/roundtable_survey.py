@@ -26,6 +26,7 @@ from app.services.llm_client import (
     format_untrusted_text_block,
     llm_call,
     llm_request_scope,
+    resolve_reasoning_effort,
     safe_llm_error_payload,
 )
 from app.services.simulator import validate_and_sanitize_turn
@@ -582,12 +583,14 @@ async def _run_single_survey_call(
     supports_structured_outputs_override: bool | None,
     supports_native_search_override: bool | None,
     native_search_upstream_override: str | None,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     prompt = _build_survey_prompt(participant, question)
     started = time.monotonic()
     async with semaphore:
         with llm_request_scope(
             purpose="roundtable_survey",
+            reasoning_effort=reasoning_effort,
             requests_per_minute=requests_per_minute,
             tokens_per_minute=tokens_per_minute,
             concurrency=concurrency,
@@ -601,7 +604,7 @@ async def _run_single_survey_call(
                     api_key=api_key,
                     base_url=base_url,
                     model=model,
-                    reasoning_effort="medium",
+                    reasoning_effort=reasoning_effort,
                     temperature=0.7,
                     timeout=60.0,
                 )
@@ -670,6 +673,7 @@ async def build_roundtable_survey_stream(
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     requests_per_minute: int | None = None,
     tokens_per_minute: int | None = None,
     concurrency: int | None = None,
@@ -679,6 +683,7 @@ async def build_roundtable_survey_stream(
 ) -> AsyncIterator[dict[str, Any]]:
     """Prepare and return the survey SSE event stream."""
 
+    reasoning_effort = resolve_reasoning_effort(reasoning_effort)
     normalized_question = _normalize_question(question)
     participant_contexts = await asyncio.to_thread(
         _load_participant_contexts,
@@ -703,6 +708,7 @@ async def build_roundtable_survey_stream(
                     api_key=api_key,
                     base_url=base_url,
                     model=model,
+                    reasoning_effort=reasoning_effort,
                     requests_per_minute=requests_per_minute,
                     tokens_per_minute=tokens_per_minute,
                     concurrency=concurrency,

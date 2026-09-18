@@ -357,20 +357,38 @@ export default function EndingChatModal({
   const finalResultSyncRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!open || readOnly || !snapshot?.id) {
+    if (!open || readOnly || !snapshot?.id || snapshot.scenario_id !== scenarioId
+      || (snapshot.room_type === 'ending_chamber' && snapshot.anchor_branch_id !== branch?.id)) {
       finalResultSyncRef.current = null;
       return;
     }
-    if (result || snapshot.status !== 'done') {
+    if ((result && snapshot.result_ready) || snapshot.status !== 'done') {
       finalResultSyncRef.current = null;
       return;
     }
     if (finalResultSyncRef.current === snapshot.id) {
       return;
     }
-    finalResultSyncRef.current = snapshot.id;
-    void loadRoom(snapshot.id);
-  }, [loadRoom, open, readOnly, result, snapshot?.id, snapshot?.status]);
+    const roomId = snapshot.id;
+    finalResultSyncRef.current = roomId;
+    void loadRoom(roomId).finally(() => {
+      if (finalResultSyncRef.current === roomId) finalResultSyncRef.current = null;
+    });
+  }, [branch?.id, loadRoom, open, readOnly, result, scenarioId, snapshot?.anchor_branch_id,
+    snapshot?.id, snapshot?.result_ready, snapshot?.room_type, snapshot?.scenario_id, snapshot?.status]);
+
+  const completionReady = Boolean(
+    effectiveSnapshot?.scenario_id === scenarioId
+    && (effectiveSnapshot.room_type !== 'ending_chamber' || effectiveSnapshot.anchor_branch_id === branch?.id)
+    && effectiveSnapshot.status === 'done'
+    && effectiveSnapshot.result_ready
+    && effectiveResult,
+  );
+  const visibleRoomStatus = readOnly
+    ? 'done'
+    : effectiveSnapshot?.status === 'done' && !completionReady
+      ? 'live'
+      : effectiveSnapshot?.status ?? (status === 'loading' ? 'draft' : 'error');
 
   const defaultThreadId = useMemo(
     () => effectiveSnapshot?.threads.find((thread) => thread.mode === 'room')?.id ?? effectiveSnapshot?.threads[0]?.id ?? null,
@@ -658,11 +676,8 @@ export default function EndingChatModal({
     ],
   );
   const latestDisplayedDraft = displayedDrafts[displayedDrafts.length - 1];
-  const latestCurrentTurn = currentTurns[currentTurns.length - 1];
-  const currentSpeakerTurnKey = latestDisplayedDraft?.key ?? latestCurrentTurn?.key ?? null;
-  const currentSpeakerParticipantId = latestDisplayedDraft?.participantId
-    ?? latestCurrentTurn?.participantId
-    ?? null;
+  const currentSpeakerTurnKey = latestDisplayedDraft?.key ?? null;
+  const currentSpeakerParticipantId = latestDisplayedDraft?.participantId ?? null;
   const handleThreadSelect = (threadId: string) => {
     const thread = effectiveThreadsById[threadId];
     if (!thread) return;
@@ -1178,7 +1193,7 @@ export default function EndingChatModal({
                 {getEndingRoomModeLabel(effectiveRoomType, t)}
               </span>
               <span className="ending-chat-badge">
-                {getEndingRoomStatusLabel(readOnly ? 'done' : (effectiveSnapshot?.status ?? (status === 'loading' ? 'draft' : 'error')), t)}
+                {getEndingRoomStatusLabel(visibleRoomStatus, t)}
               </span>
               <span className="ending-chat-badge">{t('ending_room.current_branch_badge')}</span>
               <span className="ending-chat-probability">{((branch.probability ?? 0) * 100).toFixed(1)}%</span>
@@ -1903,7 +1918,7 @@ export default function EndingChatModal({
                     disabled={!composerEnabled || sending}
                     style={{ width: '100%', padding: '0.35rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.8rem' }}
                   >
-                    <option value="">{t('model_profiles.byok_custom_option')}</option>
+                    <option value="">{t('ending_room.provider_inherit')}</option>
                     {profiles.map((p) => (
                       <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
                     ))}

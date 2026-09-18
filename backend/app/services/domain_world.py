@@ -110,6 +110,7 @@ class DomainRuleV1:
     preconditions: tuple[DomainPredicateV1, ...]
     opportunity_mode: DomainOpportunityModeV1
     epistemic_scope: _typing.Literal["scenario_assumption", "bounded_estimate"]
+    adoption_policy: _typing.Literal["unanimous_round_participants"] | None = None
 
 
 @_dataclasses.dataclass(frozen=True, slots=True)
@@ -631,7 +632,9 @@ def _normalize_rule(
             "epistemic_scope",
         }
     )
-    optional = frozenset({"opportunity_mode"}) if allow_default_opportunity_mode else frozenset()
+    optional = frozenset({"adoption_policy"})
+    if allow_default_opportunity_mode:
+        optional |= frozenset({"opportunity_mode"})
     if not allow_default_opportunity_mode:
         required |= frozenset({"opportunity_mode"})
     row = _exact_mapping(raw, required, optional=optional)
@@ -645,6 +648,18 @@ def _normalize_rule(
     if type(action_type) is not str or action_type not in _ACTION_TYPES:
         raise _SchemaInvalid
     if type(operation) is not str or operation not in _OPERATIONS:
+        raise _SchemaInvalid
+    adoption_policy = row.get("adoption_policy")
+    if variable.semantic_role == "commitment_state":
+        # Policy alternatives are target values, never independent increments.
+        # Requiring the policy also makes older commitment schemas unavailable
+        # instead of silently replaying their history under new semantics.
+        if (
+            operation != "set_if_expected"
+            or adoption_policy != "unanimous_round_participants"
+        ):
+            raise _SchemaInvalid
+    elif adoption_policy is not None:
         raise _SchemaInvalid
     unit = _normalize_unit(row["unit"])
     if unit != variable.unit:
@@ -698,6 +713,10 @@ def _normalize_rule(
         preconditions=preconditions,
         opportunity_mode=_typing.cast(DomainOpportunityModeV1, opportunity_mode),
         epistemic_scope=_typing.cast(_typing.Any, epistemic_scope),
+        adoption_policy=_typing.cast(
+            _typing.Literal["unanimous_round_participants"] | None,
+            adoption_policy,
+        ),
     )
 
 
@@ -768,6 +787,11 @@ def _schema_to_json(schema: DomainSchemaV1, *, include_labels: bool) -> dict[str
                 ],
                 "opportunity_mode": rule.opportunity_mode,
                 "epistemic_scope": rule.epistemic_scope,
+                **(
+                    {"adoption_policy": rule.adoption_policy}
+                    if rule.adoption_policy is not None
+                    else {}
+                ),
             }
             for rule in schema.rules
         ],
@@ -1021,6 +1045,11 @@ def _canonical_json_value(value: object) -> object:
         return {
             field.name: _canonical_json_value(getattr(value, field.name))
             for field in _dataclasses.fields(value)
+            if not (
+                isinstance(value, DomainRuleV1)
+                and field.name == "adoption_policy"
+                and value.adoption_policy is None
+            )
         }
     if _is_mapping(value):
         normalized: dict[str, object] = {}
@@ -1482,6 +1511,12 @@ def _validate_candidate(
     if rule.variable_id != variable.variable_id or rule.action_type != candidate.action.action_type:
         _terminal(candidate, status="failed", failure_code="DOMAIN_RULE_ACTION_MISMATCH")
         return
+    if variable.semantic_role == "commitment_state" and (
+        rule.operation != "set_if_expected"
+        or rule.adoption_policy != "unanimous_round_participants"
+    ):
+        _terminal(candidate, status="unavailable", failure_code="DOMAIN_SCHEMA_UNAVAILABLE")
+        return
 
     operation = rule.operation
     raw_requested: object
@@ -1516,6 +1551,15 @@ def _validate_candidate(
             _decimal_value(_typing.cast(str, rule.requested_minimum))
             <= requested
             <= _decimal_value(_typing.cast(str, rule.requested_maximum))
+        ):
+            _terminal(candidate, status="failed", failure_code="DOMAIN_BOUNDS_EXCEEDED")
+            return
+    if variable.semantic_role == "commitment_state" and variable.value_type in _NUMERIC_TYPES:
+        requested = _decimal_value(_typing.cast(str, candidate.requested_value))
+        if not (
+            _decimal_value(_typing.cast(str, variable.minimum))
+            <= requested
+            <= _decimal_value(_typing.cast(str, variable.maximum))
         ):
             _terminal(candidate, status="failed", failure_code="DOMAIN_BOUNDS_EXCEEDED")
             return
@@ -1564,6 +1608,37 @@ def _event_identity(candidate: _Candidate) -> tuple[str, str, str]:
     )
 
 
+def _validate_commitment_consensus(
+    candidates: _typing.Sequence[_Candidate],
+    *,
+    participant_ids: frozenset[str],
+    accepted_event_identities: frozenset[tuple[str, str, str]],
+) -> None:
+    """Adopt a target only when every complete-round actor supplies the same choice.
+
+    The durable payload remains a proposal. The frozen policy and this complete
+    round check supply adoption authority; a verified social action alone does
+    not. Adoption changes a simulated commitment, not operational execution.
+    """
+
+    by_variable: dict[str, list[_Candidate]] = {}
+    for candidate in candidates:
+        if (
+            candidate.status is None
+            and candidate.variable is not None
+            and candidate.variable.semantic_role == "commitment_state"
+            and _event_identity(candidate) not in accepted_event_identities
+        ):
+            by_variable.setdefault(candidate.variable.variable_id, []).append(candidate)
+    for rows in by_variable.values():
+        targets = {(candidate.expected_before, candidate.requested_value) for candidate in rows}
+        if (
+            {candidate.action.agent_id for candidate in rows} != participant_ids
+            or len(targets) != 1
+        ):
+            _fail_group(rows, "DOMAIN_CONFLICT")
+
+
 def _deduplicate_events(
     candidates: _typing.Sequence[_Candidate],
     accepted_event_identities: frozenset[tuple[str, str, str]],
@@ -1583,6 +1658,10 @@ def _deduplicate_events(
         if len(semantic_contents) > 1:
             for candidate in rows:
                 _terminal(candidate, status="failed", failure_code="DOMAIN_CONFLICT")
+            continue
+        if rows[0].variable and rows[0].variable.semantic_role == "commitment_state":
+            # Distinct actors can attest to the same adoption event. Preserve
+            # their sources; variable-level set reduction applies the target once.
             continue
         for candidate in rows[1:]:
             _terminal(candidate, status="duplicate", failure_code="DOMAIN_DUPLICATE_EVENT")
@@ -1760,6 +1839,10 @@ def _apply_variable_group(
         else:
             aggregate_delta = None
         applied = {_candidate_key(candidate): aggregate_delta for candidate in ordered}
+        if variable.semantic_role == "commitment_state" and aggregate_delta is not None:
+            zero_delta = _format_decimal(_decimal.Decimal(0), variable.scale)
+            for candidate in ordered[1:]:
+                applied[_candidate_key(candidate)] = zero_delta
         _verify_group(
             ordered,
             before=before,
@@ -1911,7 +1994,11 @@ def reduce_domain_round_v1(
     actions: _typing.Sequence[DomainActionInputV1],
     round_number: int,
 ) -> DomainReduceResultV1:
-    """Reduce one complete branch-round against a single immutable N-1 state."""
+    """Reduce one complete branch-round against a single immutable N-1 state.
+
+    Callers must pass every participant's action, including IDLE and actions
+    without a domain payload, after validating complete-round membership.
+    """
 
     candidates = _structural_candidates(actions)
     accepted = frozenset(
@@ -1958,6 +2045,11 @@ def reduce_domain_round_v1(
             state_revision_before=state_revision_before,
         )
     _deduplicate_within_actions(candidates)
+    _validate_commitment_consensus(
+        candidates,
+        participant_ids=frozenset(action.agent_id for action in actions),
+        accepted_event_identities=accepted,
+    )
     _deduplicate_events(candidates, accepted)
 
     eligible_by_variable: dict[str, list[_Candidate]] = {}

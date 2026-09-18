@@ -14,7 +14,7 @@ Covers the acceptance checklist from
 * DELETE abort path
 * scenario delete while streaming → SCENARIO_DELETED terminal state
 * BYOK never written to DB / logs / WS payload
-* 7 whitelisted ``turn_error.code`` values
+* Exact whitelist for mapped conversation terminal error codes
 * WS reconnect reads active thread state (via GET snapshot)
 
 These tests validate the **actual** behaviour that BE-1/BE-3 ships. Where a
@@ -415,12 +415,14 @@ class TestDeleteAbortPath:
 
 class TestScenarioDeletedTerminalState:
     def test_scenario_deleted_is_in_error_message_whitelist(self):
-        """HC-36 7-code whitelist includes ``SCENARIO_DELETED``."""
+        """HC-36 maps only the declared provider, cancellation and origin codes."""
         allowed = conversation_service_module._ERROR_MESSAGE_MAP
         assert "SCENARIO_DELETED" in allowed
-        # Exactly 7 whitelisted error codes.
         expected = {
             "USER_ABORTED",
+            "STALE_TURN_REAPED",
+            "TURN_REVOKED",
+            "INVALID_CONVERSATION_ORIGIN",
             "LLM_5XX",
             "LLM_4XX",
             "LLM_EMPTY",
@@ -428,10 +430,11 @@ class TestScenarioDeletedTerminalState:
             "BYOK_DENIED",
             "SCENARIO_DELETED",
         }
-        assert expected.issubset(set(allowed.keys()))
-        assert len(expected) == 7
-        assert len(allowed) == 7
+        assert set(allowed) == expected
         assert allowed["LLM_EMPTY"] == "LLM returned no visible content."
+        assert conversation_service_module._map_error_message(
+            "UNRECOGNIZED_PROVIDER_ERROR", "raw provider text sk-do-not-expose",
+        ) == "[redacted: non-whitelisted error]"
 
     def test_finalize_turn_cas_accepts_scenario_deleted(self):
         """``scenario_deleted`` is an allowed terminal state (HC-32)."""

@@ -47,6 +47,51 @@ from app.services.result_report.reducer import (
 )
 
 
+@pytest.mark.parametrize("domain_input", ["schema", "committed_state", "adjudication"])
+def test_result_fingerprint_covers_domain_inputs_but_not_report_history(domain_input):
+    from tests.test_action_ledger import _seed_domain_projection
+
+    seeded = _seed_domain_projection()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        original = report_queries.report_result_fingerprint(session, scenario.id)
+        parsed = json.loads(json.dumps(scenario.parsed_context))
+        parsed["full_report_history"] = {"report": {"status": "complete"}}
+        domain_round = parsed["agent_runtime_v1"]["branches"][seeded["branch_id"]]["rounds"]["1"]
+        domain_round["identity_bookkeeping"] = {"unrelated": True}
+        scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+        assert report_queries.report_result_fingerprint(session, scenario.id) == original
+        changed = json.loads(json.dumps(scenario.parsed_context))
+        domain_round = changed["agent_runtime_v1"]["branches"][seeded["branch_id"]]["rounds"]["1"]
+        if domain_input == "schema":
+            changed["domain_world_v1"]["schema"]["variables"][0]["label_en"] = "Changed label"
+        elif domain_input == "committed_state":
+            domain_round["domain_state_after"]["cash_balance"] = "30"
+        else:
+            domain_round["domain_adjudications"][0]["status"] = "failed"
+        scenario.parsed_context = changed
+        session.add(scenario)
+        session.commit()
+        assert report_queries.report_result_fingerprint(session, scenario.id) != original
+
+
+def test_reducer_includes_domain_receipts_and_keeps_narrative_consistency_unverified():
+    from tests.test_action_ledger import _seed_domain_projection
+
+    seeded = _seed_domain_projection()
+    result = reduce(get_engine(), seeded["scenario_id"], dominant_branch_id=seeded["branch_id"])
+
+    assert result.domain_context is not None
+    assert result.domain_context["status"] == "unverified"
+    assert result.domain_context["values"][0]["value"] == "7"
+    assert result.domain_context["adjudications"][0]["action_id"] == seeded["action_id"]
+    assert result.analytic_confidence.level == "low"
+    assert "Narrative/state consistency is unverified" in result.analytic_confidence.basis
+
+
 def _seed_scenario() -> str:
     engine = get_engine()
     with Session(engine) as session:

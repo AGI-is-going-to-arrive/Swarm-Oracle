@@ -8,6 +8,7 @@ from app.models import Scenario
 from app.models.database import get_engine
 from app.models.model_profile import ModelProfile
 from app.services.llm_resolution import (
+    conversation_llm_is_configured,
     merge_profile_provider_overrides,
     model_profile_provider_unresolved,
     recover_profile_provider_overrides,
@@ -225,6 +226,71 @@ def test_post_completion_resolution_allows_explicit_local_provider_without_key()
     assert resolved.api_key is None
     assert resolved.base_url == "http://host.docker.internal:11434/v1"
     assert resolved.model == "llama3.2"
+
+
+@pytest.mark.parametrize(
+    ("saved", "requested", "expected"),
+    [(None, None, "low"), ("high", None, "high"), ("high", "medium", "medium"),
+     ("high", "none", "none")],
+)
+def test_post_completion_effort_inherits_run_or_explicit_operation(
+    monkeypatch, saved, requested, expected,
+):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
+    resolved = resolve_post_completion_llm_call_config(
+        parsed_context={"reasoning_effort": saved},
+        request_reasoning_effort=requested,
+    )
+    assert resolved.reasoning_effort == expected
+
+
+def test_conversation_readiness_distinguishes_saved_binding_from_server_sentinel(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "LLM_RESPONSES_URL", "http://127.0.0.1:8317/v1")
+    monkeypatch.setattr(settings, "LLM_API_KEY", "")
+    with Session(get_engine()) as session:
+        assert not conversation_llm_is_configured(
+            session, SimpleNamespace(parsed_context={}, user_id="owner"),
+        )
+        assert conversation_llm_is_configured(
+            session,
+            SimpleNamespace(
+                parsed_context={"llm_base_url": "http://localhost:1234/v1", "llm_model": "local"},
+                user_id="owner",
+            ),
+        )
+
+
+def test_conversation_readiness_never_uses_a_foreign_or_missing_profile(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True)
+    with Session(get_engine()) as session:
+        profile = _make_profile(session, user_id="other", name="Foreign", api_key="test-key")
+        for profile_id in (profile.id, "missing-profile"):
+            assert not conversation_llm_is_configured(
+                session,
+                SimpleNamespace(
+                    parsed_context={"model_profile_id": profile_id}, user_id="owner",
+                ),
+            )
+
+
+def test_conversation_readiness_accepts_owned_profile_without_server_default(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True)
+    monkeypatch.setattr(settings, "LLM_RESPONSES_URL", "http://127.0.0.1:8317/v1")
+    monkeypatch.setattr(settings, "LLM_API_KEY", "")
+    with Session(get_engine()) as session:
+        profile = _make_profile(session, user_id="owner", name="Owned", api_key="test-key")
+        assert conversation_llm_is_configured(
+            session,
+            SimpleNamespace(parsed_context={"model_profile_id": profile.id}, user_id="owner"),
+        )
 
 
 def test_post_completion_resolution_rejects_explicit_remote_provider_without_key():

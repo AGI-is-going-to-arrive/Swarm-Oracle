@@ -42,7 +42,11 @@ from app.services.campaign import (
     normalize_scenario_director_state,
     normalize_scenario_gameplay_state,
 )
-from app.services.llm_client import is_local_provider_url, llm_request_scope
+from app.services.llm_client import (
+    is_local_provider_url,
+    llm_request_scope,
+    resolve_reasoning_effort,
+)
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
     model_profile_provider_unresolved,
@@ -1117,6 +1121,12 @@ async def run_sim_background(
                 recovered_profile_overrides,
                 include_quota_user_id=True,
             )
+            effective_llm_overrides["reasoning_effort"] = resolve_reasoning_effort(
+                effective_llm_overrides.get("reasoning_effort")
+                if effective_llm_overrides.get("reasoning_effort") is not None
+                else parsed_context.get("reasoning_effort")
+            )
+            scope_kwargs["reasoning_effort"] = effective_llm_overrides["reasoning_effort"]
             effective_base_url = effective_llm_overrides.get("base_url") or parsed_context.get(
                 "llm_base_url"
             )
@@ -1483,6 +1493,7 @@ async def parse_and_run_background(
     parse -> simulate -> narrate pipeline.
     """
     engine = get_engine()
+    reasoning_effort = resolve_reasoning_effort(reasoning_effort)
     if confirmed_profile_policy is not None:
         llm_api_key = confirmed_profile_policy.api_key
         llm_base_url = confirmed_profile_policy.base_url
@@ -1763,6 +1774,7 @@ async def parse_and_run_background(
         with llm_request_scope(
             quota_key=quota_key,
             purpose="scenario_parse",
+            reasoning_effort=reasoning_effort,
             requests_per_minute=llm_requests_per_minute,
             tokens_per_minute=llm_tokens_per_minute,
             concurrency=concurrency,
@@ -1782,6 +1794,7 @@ async def parse_and_run_background(
                     base_url=llm_base_url,
                     temperature=temperature,
                     model=llm_model,
+                    reasoning_effort=reasoning_effort,
                     world_context=world_context,
                     language=language,
                 ),
@@ -1880,7 +1893,7 @@ async def parse_and_run_background(
             parsed["llm_model"] = llm_model
         if temperature is not None:
             parsed["llm_temperature"] = temperature
-        if reasoning_effort:
+        if reasoning_effort is not None:
             parsed["reasoning_effort"] = reasoning_effort
         if llm_requests_per_minute is not None:
             parsed["llm_requests_per_minute"] = llm_requests_per_minute
@@ -2227,18 +2240,19 @@ async def parse_and_run_background(
             )
             return
 
-        llm_overrides: dict | None = None
+        llm_overrides: dict = {"reasoning_effort": reasoning_effort}
         if llm_api_key or llm_base_url or llm_model or temperature is not None:
-            llm_overrides = {
+            llm_overrides.update({
                 "api_key": _OpaqueStr(llm_api_key) if llm_api_key else None,
                 "base_url": llm_base_url,
                 "temperature": temperature,
                 "model": llm_model,
-            }
+            })
 
         with llm_request_scope(
             quota_key=quota_key,
             purpose="scenario_runtime",
+            reasoning_effort=reasoning_effort,
             requests_per_minute=llm_requests_per_minute,
             tokens_per_minute=llm_tokens_per_minute,
             concurrency=concurrency,

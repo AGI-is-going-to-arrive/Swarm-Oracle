@@ -118,6 +118,7 @@ vi.mock('react-i18next', () => ({
         'common.unknown_speaker': 'Unknown',
         'ending_room.title': 'Ending Chamber',
         'ending_room.status_done': 'Debrief complete',
+        'ending_room.provider_inherit': 'Use room model / server default',
         'ending_room.status_live': 'Speaking',
         'ending_room.status_draft': 'Preparing',
         'ending_room.current_branch_badge': 'Current worldline',
@@ -222,10 +223,17 @@ vi.mock('../hooks/useEndingRoomWS', () => ({
   useEndingRoomWS: (...args: unknown[]) => useEndingRoomWSMock(...args),
 }));
 
+const modelProfileCapability = vi.hoisted(() => ({ enabled: false }));
+
+vi.mock('../api/client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api/client')>(),
+  listModelProfiles: vi.fn(async () => ({ profiles: [], count: 0 })),
+}));
+
 vi.mock('../hooks/useCapabilityCheck', () => ({
-  useCapabilityCheck: () => ({
+  useCapabilityCheck: (key: string) => ({
     loading: false,
-    enabled: false,
+    enabled: key === 'model_profiles' && modelProfileCapability.enabled,
     capabilities: null,
   }),
 }));
@@ -247,6 +255,7 @@ vi.mock('../stores/endingRoomStore', () => ({
 describe('EndingChatModal', () => {
   beforeEach(() => {
     onAutomationStateChangeMock.mockReset();
+    modelProfileCapability.enabled = false;
     storeState.snapshot = null;
     storeState.result = null;
     storeState.threadsById = {};
@@ -438,6 +447,86 @@ describe('EndingChatModal', () => {
     };
     storeState.status = 'done';
   };
+
+  it('does not keep a committed participant marked as speaking', () => {
+    buildLiveSnapshot();
+    render(
+      <EndingChatModal open scenarioId="scenario-1" branch={branch} language="en" roomType="ending_chamber" readOnly={false}
+        onClose={vi.fn()} onModeChange={vi.fn()} onAutomationStateChange={onAutomationStateChangeMock} />,
+    );
+    expect(screen.getByText('Committed turn.')).toBeInTheDocument();
+    expect(document.querySelector('.is-current-speaker')).not.toBeInTheDocument();
+    expect(screen.queryByText('Speaking')).not.toBeInTheDocument();
+    const payload = onAutomationStateChangeMock.mock.calls.map(([state]) => state).find((state) => state !== null);
+    expect(payload).toMatchObject({ current_speaker_participant_id: null, current_speaker_turn_key: null });
+  });
+
+  it.each([
+    ['live', true, true, false],
+    ['done', false, true, false],
+    ['done', true, false, false],
+    ['done', true, true, true],
+  ] as const)('shows completion only for authoritative ready results: %s / %s / %s', (status, ready, hasResult, complete) => {
+    buildLiveSnapshot();
+    storeState.snapshot = { ...storeState.snapshot!, status, result_ready: ready };
+    if (!hasResult) storeState.result = null;
+    render(
+      <EndingChatModal open scenarioId="scenario-1" branch={branch} language="en" roomType="ending_chamber" readOnly={false}
+        onClose={vi.fn()} onModeChange={vi.fn()} />,
+    );
+    expect(Boolean(screen.queryByText('Debrief complete'))).toBe(complete);
+  });
+
+  it('resyncs a terminal event lacking a result-ready snapshot before showing completion', async () => {
+    buildLiveSnapshot();
+    storeState.snapshot = { ...storeState.snapshot!, result_ready: false };
+    let resolveSync!: () => void;
+    const sync = new Promise<void>((resolve) => { resolveSync = resolve; });
+    storeState.loadRoom.mockReturnValueOnce(sync);
+    const modal = (
+      <EndingChatModal open scenarioId="scenario-1" branch={branch} language="en" roomType="ending_chamber" readOnly={false}
+        onClose={vi.fn()} onModeChange={vi.fn()} />
+    );
+    const view = render(modal);
+    expect(storeState.loadRoom).toHaveBeenCalledWith('room-1');
+    expect(screen.queryByText('Debrief complete')).not.toBeInTheDocument();
+    view.rerender(modal);
+    expect(storeState.loadRoom).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      storeState.snapshot = { ...storeState.snapshot!, result_ready: true };
+      resolveSync();
+      await sync;
+    });
+    view.rerender(<EndingChatModal open scenarioId="scenario-1" branch={branch} language="en" roomType="ending_chamber" readOnly={false}
+      onClose={vi.fn()} onModeChange={vi.fn()} />);
+    expect(screen.getByText('Debrief complete')).toBeInTheDocument();
+  });
+
+  it('never displays the previous scenario completion while a new room is opening', () => {
+    buildLiveSnapshot();
+    render(
+      <EndingChatModal open scenarioId="scenario-2" branch={{ ...branch, id: 'branch-2' }} language="en" roomType="ending_chamber" readOnly={false}
+        onClose={vi.fn()} onModeChange={vi.fn()} />,
+    );
+    expect(screen.queryByText('Debrief complete')).not.toBeInTheDocument();
+    expect(storeState.loadRoom).not.toHaveBeenCalled();
+  });
+
+  it('labels the empty profile as inherited and sends no custom profile identifier', async () => {
+    buildLiveSnapshot();
+    modelProfileCapability.enabled = true;
+    storeState.composerDraft = 'What made this decision hold?';
+    render(
+      <EndingChatModal open scenarioId="scenario-1" branch={branch} language="en" roomType="ending_chamber" readOnly={false}
+        onClose={vi.fn()} onModeChange={vi.fn()} />,
+    );
+    const inherited = await screen.findByRole('option', { name: 'Use room model / server default' });
+    expect(inherited).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(storeState.appendUserTurn).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'What made this decision hold?', followupModelProfileId: undefined,
+    }));
+  });
 
   it('renders replay fallback transcript without creating a live room', () => {
     render(

@@ -1265,7 +1265,7 @@ async def _build_family_search_queries(
             llm_call_json_for_family_query_reformulation(
                 prompt,
                 temperature=0.1,
-                reasoning_effort="low",
+                reasoning_effort=None,
                 model=None,
                 api_key=None,
                 base_url=None,

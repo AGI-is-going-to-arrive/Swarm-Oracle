@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 import app.services.parser as parser_module
@@ -998,7 +999,8 @@ class TestParseQuestion:
         assert "路人甲" not in {agent["name"] for agent in result["agents"]}
 
     @pytest.mark.asyncio
-    async def test_retry_uses_diversified_settings(self, monkeypatch):
+    @pytest.mark.parametrize("reasoning_effort", [None, "low", "high", "none"])
+    async def test_retry_uses_diversified_settings(self, monkeypatch, reasoning_effort):
         first_result = {
             "setting": {"time_period": "未来", "location": "边疆星域", "background": "测试背景"},
             "key_variable": "自治城邦",
@@ -1026,12 +1028,14 @@ class TestParseQuestion:
             max_agents=3,
             target_agents=3,
             temperature=0.4,
+            reasoning_effort=reasoning_effort,
         )
 
         assert len(result["agents"]) == 3
         assert llm_mock.await_count == 2
         retry_kwargs = llm_mock.await_args_list[1].kwargs
-        assert retry_kwargs["reasoning_effort"] == "medium"
+        assert retry_kwargs["reasoning_effort"] == reasoning_effort
+        assert llm_mock.await_args_list[0].kwargs["reasoning_effort"] == reasoning_effort
         assert retry_kwargs["temperature"] == pytest.approx(0.5)
 
     @pytest.mark.asyncio
@@ -1199,3 +1203,47 @@ class TestParseQuestion:
 
         assert llm_mock.await_count == 1
         assert result["simulation_rounds"] == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("selected", "server", "expected"),
+    [(None, "low", "low"), ("low", "high", "low"), ("high", "low", "high"),
+     ("none", "high", None)],
+)
+async def test_parser_initial_and_underfill_retry_preserve_wire_effort(
+    monkeypatch, selected, server, expected,
+):
+    from app.services import llm_client
+
+    payloads = []
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        parsed = _valid_parse_payload(
+            1 if len(payloads) == 1 else 3,
+            initial_title="Initial" if len(payloads) == 1 else "Complete",
+        )
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps(parsed)}}],
+        })
+
+    monkeypatch.setattr(llm_client.settings, "LLM_REASONING_EFFORT", server)
+    monkeypatch.setattr(llm_client, "probe_streaming_support", AsyncMock(
+        return_value={"supported": False},
+    ))
+    monkeypatch.setattr(
+        parser_module, "llm_call_json_with_stream_fallback",
+        llm_client.llm_call_json_with_stream_fallback,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: client)
+        parsed = await parse_question(
+            "What happens if the council adopts a shared budget?",
+            max_agents=3, target_agents=3, reasoning_effort=selected,
+            base_url="http://127.0.0.1:8317/v1/chat/completions", model="policy-model",
+        )
+    assert len(parsed["agents"]) == 3
+    assert len(payloads) == 2
+    assert [payload.get("reasoning_effort") for payload in payloads] == [expected, expected]
+    assert all(payload["model"] == "policy-model" for payload in payloads)

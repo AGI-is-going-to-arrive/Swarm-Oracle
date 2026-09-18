@@ -44,6 +44,15 @@ function logUnexpectedPersonaError(context: string, error: unknown) {
   }
 }
 
+function personaImportKey(payload: PersonaExportPayload): string {
+  return JSON.stringify([
+    payload.schema_version, payload.exported_at,
+    payload.persona.name, payload.persona.role, payload.persona.persona_text,
+    Object.entries(payload.persona.decision_bias).sort(([left], [right]) => left.localeCompare(right)),
+    payload.persona.tags,
+  ]);
+}
+
 // ── ExportButton ────────────────────────────────────────
 
 export interface ExportButtonProps {
@@ -155,6 +164,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
   const [submitting, setSubmitting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
+  const [conflictedPayloads, setConflictedPayloads] = useState<readonly string[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   useFocusTrap(dialogRef, open);
@@ -167,6 +177,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
       setSubmitting(false);
       setDragActive(false);
       setPasteOpen(false);
+      setConflictedPayloads([]);
     }
   }, [open]);
 
@@ -195,6 +206,18 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     }
   }, [open]);
 
+  const currentImportKey = useMemo(() => {
+    try {
+      const parsed: unknown = JSON.parse(pasted);
+      const result = validatePersonaPayload(parsed);
+      return result.ok ? personaImportKey(result.payload) : null;
+    } catch {
+      return null;
+    }
+  }, [pasted]);
+  const conflictBlocked = currentImportKey !== null && conflictedPayloads.includes(currentImportKey);
+  const changedInputInvalid = conflictedPayloads.length > 0 && currentImportKey === null;
+
   const errorMessage = useMemo(() => {
     if (!errorKey) return null;
     if (errorKey === 'persona_export.invalid_schema') {
@@ -213,7 +236,10 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
       return t('persona_export.invalid_json', 'Invalid JSON');
     }
     if (errorKey === 'persona_export.import_conflict') {
-      return t('persona_export.import_conflict', 'This Agent backup already exists for your account.');
+      return conflictBlocked ? t(
+        'persona_export.import_conflict',
+        'This Agent backup already exists for your account. Choose a different backup or change its content before trying again.',
+      ) : null;
     }
     if (errorKey === 'persona_export.import_invalid') {
       return t('persona_export.import_invalid', 'Agent backup failed server validation.');
@@ -225,7 +251,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
       return t('persona_export.import_failed', 'Could not create Agent from backup. Please try again.');
     }
     return errorKey;
-  }, [errorKey, t]);
+  }, [conflictBlocked, errorKey, t]);
 
   const ingestText = useCallback((text: string): { ok: true; payload: PersonaExportPayload } | { ok: false } => {
     let parsed: unknown;
@@ -240,9 +266,10 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
       setErrorKey(result.errorKey);
       return { ok: false };
     }
-    setErrorKey(null);
+    setErrorKey(conflictedPayloads.includes(personaImportKey(result.payload))
+      ? 'persona_export.import_conflict' : null);
     return { ok: true, payload: result.payload };
-  }, []);
+  }, [conflictedPayloads]);
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.json') && file.type && !file.type.includes('json')) {
@@ -305,6 +332,8 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     }
     const result = ingestText(pasted);
     if (!result.ok) return;
+    const importKey = personaImportKey(result.payload);
+    if (conflictedPayloads.includes(importKey)) return;
     setSubmitting(true);
     try {
       const response = await importPersona(result.payload);
@@ -316,6 +345,8 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
       const code = apiErrorCode(err);
       if (!code) logUnexpectedPersonaError('Import', err);
       if (code === 'PERSONA_IMPORT_CONFLICT') {
+        setConflictedPayloads((current) => current.includes(importKey)
+          ? current : [...current, importKey]);
         setErrorKey('persona_export.import_conflict');
       } else if (code === 'PERSONA_IMPORT_INVALID') {
         setErrorKey('persona_export.import_invalid');
@@ -327,7 +358,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     } finally {
       setSubmitting(false);
     }
-  }, [ingestText, onClose, onImported, pasted, submitting]);
+  }, [conflictedPayloads, ingestText, onClose, onImported, pasted, submitting]);
 
   if (!open) return null;
 
@@ -435,8 +466,10 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
                   className="persona-paste-textarea"
                   value={pasted}
                   onChange={(e) => {
-                    setPasted(e.target.value);
-                    if (errorKey) setErrorKey(null);
+                    const text = e.target.value;
+                    setPasted(text);
+                    if (conflictedPayloads.length > 0 && text.trim()) ingestText(text);
+                    else if (errorKey) setErrorKey(null);
                   }}
                   spellCheck={false}
                   data-testid="persona-paste-textarea"
@@ -463,7 +496,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
             <button
               type="submit"
               className="agent-button agent-button--primary"
-              disabled={submitting || !pasted.trim()}
+              disabled={submitting || !pasted.trim() || conflictBlocked || changedInputInvalid}
               aria-busy={submitting}
             >
               {t('persona_export.submit', 'Create as New Agent')}

@@ -6520,3 +6520,241 @@ class TestResolveNativeSearchEndpointDerivation:
 
         assert decision.would_inject_tools is False
         assert "capability_off" in decision.blocking_reasons
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ["chat/completions", "responses"])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    ("server_effort", "run_effort", "call_effort", "expected"),
+    [
+        ("high", "low", "medium", "low"),
+        ("low", "high", "low", "high"),
+        ("high", "none", "high", None),
+        ("low", None, None, "low"),
+        ("low", None, "high", "high"),
+    ],
+)
+async def test_effective_run_effort_reaches_actual_provider_payload(
+    monkeypatch, protocol, streaming, server_effort, run_effort, call_effort, expected,
+):
+    payloads = []
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        if streaming:
+            events = (
+                [{"choices": [{"delta": {"content": "OK"}}]}, "[DONE]"]
+                if protocol == "chat/completions"
+                else [
+                    {"type": "response.output_text.delta", "delta": "OK"},
+                    {"type": "response.completed", "response": {"status": "completed"}},
+                ]
+            )
+            body = "".join(
+                f"data: {event if isinstance(event, str) else json.dumps(event)}\n\n"
+                for event in events
+            )
+            return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+        response = (
+            {"choices": [{"message": {"content": "OK"}}]}
+            if protocol == "chat/completions"
+            else {"output": [{
+                "type": "message", "content": [{"type": "output_text", "text": "OK"}],
+            }]}
+        )
+        return httpx.Response(200, json=response)
+
+    monkeypatch.setattr(llm_client.settings, "LLM_REASONING_EFFORT", server_effort)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: client)
+        with llm_client.llm_request_scope(reasoning_effort=run_effort):
+            with llm_client.llm_request_scope(purpose="nested_generation"):
+                kwargs = {
+                    "base_url": f"http://127.0.0.1:8317/v1/{protocol}",
+                    "model": "policy-test-model",
+                    "reasoning_effort": call_effort,
+                }
+                if streaming:
+                    result = "".join([
+                        part async for part in llm_client.llm_call_stream("Reply OK", **kwargs)
+                    ])
+                else:
+                    result = await llm_call("Reply OK", **kwargs)
+    assert result == "OK"
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert payload["model"] == "policy-test-model"
+    assert payload.get("reasoning_effort") == (
+        expected if protocol == "chat/completions" else None
+    )
+    assert payload.get("reasoning") == (
+        {"effort": expected} if expected is not None and protocol == "responses" else None
+    )
+    assert llm_client.resolve_reasoning_effort() == server_effort
+
+
+@pytest.mark.asyncio
+async def test_reasoning_scope_isolated_between_tasks_and_restored_after_failure(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "LLM_REASONING_EFFORT", "medium")
+    payloads = {}
+
+    async def respond(request):
+        payload = json.loads(request.content)
+        await asyncio.sleep(0)
+        payloads[payload["messages"][0]["content"]] = payload.get("reasoning_effort")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+    async def run(effort):
+        try:
+            with llm_client.llm_request_scope(reasoning_effort=effort):
+                with llm_client.llm_request_scope(purpose="nested_task"):
+                    await llm_call(
+                        effort, reasoning_effort="medium",
+                        base_url="http://127.0.0.1:8317/v1/chat/completions",
+                    )
+                raise RuntimeError("finish this request")
+        except RuntimeError:
+            assert llm_client.resolve_reasoning_effort() == "medium"
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: client)
+        await asyncio.gather(run("low"), run("high"), run("none"))
+    assert payloads == {"low": "low", "high": "high", "none": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", ["low", "high", "none"])
+async def test_streaming_json_probe_and_result_use_same_selected_effort(monkeypatch, effort):
+    payloads = []
+    llm_client._stream_support_cache.clear()
+
+    def respond(request):
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        text = "OK" if "Respond with" in payload["messages"][0]["content"] else '{"ok":true}'
+        if payload.get("stream"):
+            body = (
+                "data: " + json.dumps({"choices": [{"delta": {"content": text}}]})
+                + "\n\ndata: [DONE]\n\n"
+            )
+            return httpx.Response(200, text=body)
+        return httpx.Response(200, json={"choices": [{"message": {"content": text}}]})
+
+    monkeypatch.setattr(llm_client.settings, "LLM_REASONING_EFFORT", "medium")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: client)
+        result = await llm_call_json_with_stream_fallback(
+            "Return the requested JSON", reasoning_effort=effort,
+            base_url="http://127.0.0.1:8317/v1/chat/completions",
+            model="policy-test-model", use_structured_outputs=False,
+        )
+    assert result == {"ok": True}
+    assert len(payloads) >= 2  # The capability probe is also a provider request.
+    assert all(payload.get("reasoning_effort") == (None if effort == "none" else effort)
+               for payload in payloads)
+    llm_client._stream_support_cache.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", [None, "high", "none"])
+@pytest.mark.parametrize("surface", [
+    "memory", "debate_persona", "argument_enrichment", "room_insight",
+    "roundtable_analyst", "roundtable_survey",
+])
+async def test_internal_generation_helpers_preserve_selected_wire_effort(
+    monkeypatch, selected, surface,
+):
+    from app.models import DebateSide
+    from app.services import debate_argument_map, debate_prompts, memory
+    from app.services import roundtable_analyst as analyst
+    from app.services import roundtable_survey as survey
+    from app.services.ending_room_service import _content as room_content
+
+    sentence = "The council keeps its review process open."
+    results = {
+        "memory": {"situation": sentence, "active_debates": [], "key_quotes": [],
+                   "tension_points": [], "consensus": ""},
+        "debate_persona": {"name": "Ada", "role": "Policy analyst", "persona": sentence},
+        "argument_enrichment": {"units": [{
+            "text": sentence, "type": "evidence", "stance": "supports_proposition",
+            "confidence": 0.9,
+        }]},
+        "roundtable_analyst": {"action": "final_response", "answer": sentence},
+    }
+    payloads = []
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        text = json.dumps(results[surface]) if surface in results else sentence
+        return httpx.Response(200, json={"choices": [{"message": {"content": text}}]})
+
+    async def no_stream_probe(**_kwargs):
+        return {"supported": False}
+
+    monkeypatch.setattr(llm_client.settings, "LLM_REASONING_EFFORT", "low")
+    monkeypatch.setattr(llm_client, "probe_streaming_support", no_stream_probe)
+    overrides = {
+        "base_url": "http://127.0.0.1:8317/v1/chat/completions",
+        "model": "selected-policy-model", "reasoning_effort": selected,
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: client)
+        if surface == "memory":
+            result = await memory.compress_rounds(
+                "[Ada]: Keep the public review open.\n" * 1200,
+                language="English", **overrides,
+            )
+            assert result["situation"] == sentence
+        elif surface == "debate_persona":
+            result = await debate_prompts.generate_persona_with_llm(
+                "en", "governance", DebateSide.PROPOSITION,
+                "Should public reviews continue?", llm_overrides=overrides,
+            )
+            assert result is not None and result["name"] == "Ada"
+        elif surface == "argument_enrichment":
+            monkeypatch.setattr(llm_client.settings, "ARGUMENT_MAP_LLM_ENRICHMENT", True)
+            debate_argument_map.extract_argument_units(
+                debate_id="policy-debate", turn_id="policy-turn", content=sentence,
+                speaker_side="proposition",
+            )
+            result = await debate_argument_map.enrich_argument_units_for_turn(
+                debate_id="policy-debate", turn_id="policy-turn", speaker_side="proposition",
+                language="en", llm_overrides=overrides,
+            )
+            assert result == 1
+        elif surface == "room_insight":
+            monkeypatch.setattr(llm_client.settings, "FEATURE_ROUNDTABLE_INSIGHT_LLM", True)
+            result = await room_content._enhance_roundtable_phase_insights(
+                insights=[{"phase": "opening", "insight_body": "A previous usable insight."}],
+                planned_turns=[], language="en", scenario_question="Does review continue?",
+                llm_overrides=overrides,
+            )
+            assert result[0]["insight_body"] == sentence
+        elif surface == "roundtable_analyst":
+            context = analyst.AnalystScenarioContext(
+                "policy-scenario", "Does review continue?", "Ada",
+            )
+            monkeypatch.setattr(analyst, "_load_scenario_context", lambda *_: context)
+            stream = await analyst.build_roundtable_analyst_stream(
+                "policy-scenario", "Does review continue?", **overrides,
+            )
+            events = [event async for event in stream]
+            assert events[-1]["data"]["answer"] == sentence
+        else:
+            participant = survey.SurveyParticipantContext(
+                participant_id="ada", display_name="Ada", role="Policy analyst", persona="Direct",
+                language="en", scenario_question="Does review continue?", agent_identity_id=None,
+                source_agent_id=None, source_branch_id=None, branch_card={},
+                roundtable_summary=[], memories=[],
+            )
+            monkeypatch.setattr(survey, "_load_participant_contexts", lambda *_: [participant])
+            stream = await survey.build_roundtable_survey_stream(
+                "policy-scenario", "Does review continue?", ["ada"], **overrides,
+            )
+            events = [event async for event in stream]
+            assert events[-1]["data"]["answer"] == sentence
+    assert len(payloads) == (2 if surface == "memory" else 1)
+    expected = None if selected == "none" else selected or "low"
+    assert all(payload.get("reasoning_effort") == expected for payload in payloads)
+    assert all(payload["model"] == "selected-policy-model" for payload in payloads)

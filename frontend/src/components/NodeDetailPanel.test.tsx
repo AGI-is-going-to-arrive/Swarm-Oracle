@@ -351,6 +351,15 @@ describe('NodeDetailPanel', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('offers an explicit optional Ask action without treating it as Close', async () => {
+    const onAsk = vi.fn();
+    const onClose = vi.fn();
+    render(<NodeDetailPanel node={{ id: 'node', type: 'event', label: 'Node' }} onClose={onClose} onAsk={onAsk} />);
+    await userEvent.setup().click(screen.getByTestId('node-detail-ask'));
+    expect(onAsk).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('does not hijack Escape when focus has already moved outside the modeless dialog', async () => {
     const user = userEvent.setup();
     const node: NodeDetail = { id: 'n1', label: 'Modeless node', type: 'event' };
