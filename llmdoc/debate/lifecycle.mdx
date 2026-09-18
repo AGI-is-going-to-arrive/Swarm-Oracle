@@ -1,5 +1,5 @@
 ---
-description: 辩论 Debate 的 UUID 操作身份、终态与取消、只读历史回放、显式新建重启及幂等 provider 确认；删除后旧请求与迟到事件不能恢复运行。
+description: Debate 操作身份、终态与只读恢复 / Debate operation identity, terminal states, read-only recovery, idempotent restart, and post-deletion failure semantics.
 kind: architecture
 relations:
   requires:
@@ -26,17 +26,37 @@ code:
     - frontend/src/components/DebateShareModal.tsx
 ---
 
-# 辩论终态、重启与只读恢复
+# 辩论终态、重启与只读恢复 / Debate Terminal States, Restart, and Read-Only Recovery
 
 读取历史、重新打开页面和播放本地 replay 都不启动模型。对终态辩论的“重新开始”创建新的运行并保留源记录；它不是继续被取消的 worker。辩论有独立的操作身份和终态合同，不能把其幂等或取消规则无差别套到 Scenario、Room。
 
-## 不确定请求与幂等
+Reading history, reopening a page, and playing a local replay never start a model. Restarting a terminal debate creates a new run while preserving the source record; it does not continue a cancelled worker. Debate has its own operation identity and terminal-state contract, so its idempotency and cancellation rules cannot be applied indiscriminately to Scenario or Room.
 
-创建或重启的 UUID 对应一次明确意图。请求已接受后，响应丢失的重试先查持久化 receipt，再考虑重新解析 provider；因此后来编辑或删除 profile 不会让已接受意图产生第二个运行。相同 UUID 对应不同请求时拒绝，前端单独生成 nonce 并不足以提供此保证。
+![辩论从可撤销核对到只读历史的生命周期](../../docs/illustrations/rewrite-compare.zh.webp)
+
+*辩论创建和重启都先冻结意图，再把终态保留为只读历史。*
+
+> **English diagram details**
+>
+> ![Debate lifecycle from reversible review to read-only history](../../docs/illustrations/rewrite-compare.en.webp)
+>
+> *Both creation and restart freeze the user's intent before execution, while terminal runs remain read-only history.*
+
+## 启动核对 / Launch Review
+
+初次创建与重启都先生成可撤销的启动快照，固定问题、两方与裁决者、四个发言阶段、模型绑定、reasoning effort 和操作 UUID。规模滑杆只属于 Scenario，不改变 Debate 的固定结构。只有用户显式确认该快照才创建运行；取消返回草稿，owner/session 变化使确认失效。
+
+Initial creation and restart first produce a reversible launch snapshot that fixes the question, two sides, judge, four speaking phases, model binding, reasoning effort, and operation UUID. The scale slider belongs only to Scenario and does not change Debate's fixed structure. A run is created only after explicit confirmation; cancellation returns to the draft, and an owner or session change invalidates the confirmation.
+
+## 不确定请求与幂等 / Uncertain Requests and Idempotency
+
+创建或重启的 UUID 对应一次明确意图。请求已接受后，响应丢失的重试先查持久化 receipt，再考虑重新解析 provider；因此后来编辑或删除 profile 不会让已接受意图产生第二个运行。相同 UUID 对应不同请求时拒绝，前端单独生成 nonce 并不足以提供此保证。未确定结果的重试必须复用原快照与 UUID，不能把已编辑草稿混入同一意图。
 
 重启选项中的名称、模型和确认令牌来自同一配置快照。模型绑定必须明确选择；原 profile 不可用时不能静默回退服务端模型。POST 结果不确定后，前端在当前源辩论的 sessionStorage 保留不含凭据的完整待确认请求，重试沿用 UUID、选项和令牌，不能边重试边切换模型。
 
-## 写入、取消与删除
+A creation or restart UUID identifies one explicit intent. After a request is accepted, a retry caused by a lost response checks the durable receipt before resolving a provider, so later profile edits or deletion cannot create a second run. Reusing a UUID for different content is rejected; a frontend nonce alone does not provide this guarantee. An uncertain retry must reuse the original snapshot and UUID, never an edited draft. Restart name, model, and confirmation token come from one configuration snapshot. Model binding is explicit and cannot silently fall back when the original profile is unavailable. After an uncertain POST, sessionStorage keeps the complete credential-free confirmed request for that source debate, and retries preserve its UUID, options, and token.
+
+## 写入、取消与删除 / Writes, Cancellation, and Deletion
 
 运行时及论证图写入共同遵守序列化事务、精确 lease、runtime epoch 和永久 deletion tombstone。取消先保存 `cancelled`，再通知本进程任务，保留真实已有发言；未完成的预测和反制不伪造评分。如果 DONE 或 ERROR 先赢得竞态，取消接口返回实际刷新后的终态，不宣称取消已经发生。
 
@@ -44,8 +64,12 @@ code:
 
 前端的 cancelled/deleted 状态具有粘性。迟到 phase、turn、score、verdict、error 或 snapshot 不得使运行复活；合法 cancelled snapshot 可以恢复其已保存发言。路由和载入代次隔离不同辩论，不能把旧运行的事件应用到新记录。
 
-## 浏览器本地副本
+Runtime and argument-map writes share serialized transactions, exact leases, runtime epochs, and permanent deletion tombstones. Cancellation persists `cancelled` before notifying the local task and preserves real speech already written; unfinished predictions and rebuttals do not fabricate scores. If DONE or ERROR wins the race, the cancellation endpoint returns the refreshed terminal state. Deletion atomically removes the run, graph, and related data while leaving permanent tombstones for the debate and its operation requests. Late workers, graph enhancement, and same-UUID retries cannot recreate it. Debate has no Chroma resources and never enters Scenario or identity vector-cleanup queues. On the frontend, cancelled and deleted states are sticky: late phase, turn, score, verdict, error, or snapshot events cannot revive a run. A valid cancelled snapshot may restore saved speech, while route and load generations prevent events from one debate reaching another.
+
+## 浏览器本地副本 / Browser-Local Copies
 
 本地 replay 链接引用浏览器保存的只读副本，不是服务端辩论记录。副本按合法规范化内容去重，并受数量和序列化字符容量（JS 字符串长度）约束；超额淘汰旧副本。损坏缓存不能悄悄覆盖，存储失败也不能伪造有效链接。只重置 replay 副本键须是用户明确操作，不删除服务端记录或其它偏好。
 
 历史显示使用实际保存的 provider 描述；只有当前 profile 可查时必须标明那是当前配置，不能让后来的 profile 编辑重写历史运行使用过的模型。
+
+Local replay links refer to read-only browser copies, not server Debate records. Copies are deduplicated by valid normalized content and bounded by count and serialized JavaScript-character capacity, with oldest copies evicted on overflow. Corrupt storage cannot be silently overwritten, and a storage failure cannot fabricate a valid link. Resetting only the replay-copy key requires an explicit user action and does not delete server records or other preferences. History displays the provider description saved with the run. If only the current profile can be resolved, it must be labeled as current configuration so later edits never rewrite the model attributed to history.

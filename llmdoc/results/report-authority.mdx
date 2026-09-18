@@ -1,5 +1,5 @@
 ---
-description: 自动 brief 简报、按需 full 分析、报告翻译及原始证据；当前结果指纹、历史报告、取消和 lease 写入权限的合同。
+description: 报告深度、当前/历史权限与证据 / Report depth, current versus historical authority, domain consistency, translation, evidence, fingerprints, and leases.
 kind: architecture
 relations:
   requires:
@@ -26,23 +26,41 @@ code:
     - frontend/src/types.ts
 ---
 
-# 报告深度、语言与证据权限
+# 报告深度、语言与证据权限 / Report Depth, Language, and Evidence Authority
 
 报告是对已保存模拟资料的分析，不能反过来改写原始发言、分支或现实发生概率。当前报告与历史快照的区分取决于结果范围绑定，而不是标题、生成时间或前端缓存是否存在。
 
-## 简报与完整分析
+A report analyzes saved simulation material. It cannot rewrite original speech, branches, or real-world probabilities. Current authority versus historical snapshot status is determined by the bound result scope, not by title, generation time, or the presence of a frontend cache.
+
+![当前报告、历史报告与证据权限](../../docs/illustrations/decisions.zh.webp)
+
+*报告只有在范围指纹仍匹配当前结果时，才拥有当前结论权限。*
+
+> **English diagram details**
+>
+> ![Authority boundaries for current reports, historical reports, and evidence](../../docs/illustrations/decisions.en.webp)
+>
+> *A report has current verdict authority only while its scope fingerprint still matches the current result.*
+
+## 简报与完整分析 / Brief and Full Analysis
 
 自动结束路径明确生成 `detail_level: brief`：使用已有 reducer、当前结论和可追溯证据摘要，不额外执行完整报告的规划、章节、访谈或指标生成。简报的 static tier 是有意选择的低成本路径，不能当成待自动重试的生成失败。
 
-用户可显式生成 full 分析；旧报告未提供深度时仍按 full 解释。深度与各章节的 generation、rewrite、static 层级是不同维度，部分静态章节不意味着整份报告从未生成。自动简报不会覆盖已有可读完整报告；完整升级失败或取消时，已有可读报告继续保留，界面将本次失败与保存内容分别表达。
+用户可显式生成 full 分析；旧报告未提供深度时仍按 full 解释。深度与各章节的 generation、rewrite、static 层级是不同维度，部分静态章节不意味着整份报告从未生成。同一当前结果指纹下，自动简报不覆盖可读完整报告；当旧 full 已失去当前指纹时，它不能阻止生成当前 brief。完整升级失败或取消时，已有可读报告继续保留，界面将本次失败与保存内容分别表达。
 
-## 当前结果与历史快照
+The automatic completion path deliberately creates `detail_level: brief` from the existing reducer, current verdict, and traceable evidence summary without running full-report planning, sections, interviews, or metrics. Its static tier is an intentional low-cost route, not a generation failure awaiting retry. A user may explicitly request a full analysis; legacy reports without a depth field are treated as full. Report depth and each section's generation, rewrite, or static tier are separate dimensions. Under the same current result fingerprint, an automatic brief cannot replace a readable full report. A stale full report cannot prevent creation of a current brief. If a full upgrade fails or is cancelled, the readable saved report remains and the UI separates saved content from the failed attempt.
+
+## 当前结果与历史快照 / Current Result and Historical Snapshot
 
 只有范围指纹与当前 durable reducer 输入一致、状态和目标分支合格的 complete/partial 报告，才可作为 `/story` 当前编译结论与 world-outcome Claim 的 authority。缺少范围绑定或范围已变化的报告仍可阅读，但必须标为 stale，不能替换当前 verdict、模型自评或证据支持度。
 
 生成、重试和翻译共用精确 report lease、runtime epoch 与结果范围检查。最终写入在序列化事务中重新确认权限，并原子保存 payload 和范围绑定；翻译还比较原报告，防止把基于旧文本的结果覆盖到更新后的报告。取消、删除、接管或旧 scope 响应都不能恢复已失去权限的 worker。自动报告失败不能阻断主模拟的完成事件。
 
-## 按需翻译
+切换到新结果指纹时，最多保留一份先前 full 为只读 `historical_full_report`，当前 brief/full 与历史正文分开展示。历史报告不触发新模型调用，也不能给当前 verdict、Claim 或结果操作授权。Snapshot 导入会 remap 可验证的证据坐标并重建当前 domain receipt；导入前的报告指纹和历史 domain receipt 不具可移植 authority，不能绑定为导入后当前报告。
+
+Only a complete or partial report whose scope fingerprint still matches the durable reducer inputs, status, and eligible target branch may authorize the current `/story` verdict and world-outcome Claims. An unbound or changed-scope report remains readable but stale and cannot replace the current verdict, model self-assessment, or evidence support. Generation, retry, and translation share an exact report lease, runtime epoch, and result-scope check. Final writes revalidate authority inside a serialized transaction and atomically persist the payload and scope binding; translation also compares its source report. Cancellation, deletion, takeover, and old-scope responses cannot restore a worker that lost authority, and automatic-report failure cannot block simulation completion. When the result fingerprint changes, at most one earlier full report is retained as read-only `historical_full_report`. It neither triggers a model call nor authorizes the current verdict, Claims, or result actions. Snapshot import remaps verifiable evidence coordinates and rebuilds the current domain receipt; pre-import report fingerprints and domain receipts are not portable authority.
+
+## 按需翻译 / On-Demand Translation
 
 界面语言与报告正文语言独立。切换界面不代表正文已翻译；缺少完整目标语言时保留可读原文并明确说明。翻译是显式模型操作，遵循与完整分析相同的成本披露、provider 选择和状态边界。
 
@@ -50,8 +68,14 @@ code:
 
 译文结论必须标明来自当前报告的翻译，并保留原结论入口。历史报告译文没有当前 authority。Markdown 展示和导出选择相同正文语言；证据引用、snapshot 和结构化存档保持原始来源，不能把翻译后的引文冒充原话。
 
-## Claim 与可审查证据
+UI language and report-body language are independent. Switching the interface never implies that the body has been translated; a missing complete target language preserves the original with a clear notice. Translation is an explicit model action with the same cost disclosure, provider choice, and state boundaries as full analysis. `authored_content_i18n` stores translated author prose only; primary fields, evidence coordinates, Claim identity, original names, exact quotations, and numeric sources remain unchanged. Protected fragments must survive. New unprotected numbers, URLs, or code atoms, substantial non-target-language text, over-limit output, or a changed source cause rejection while preserving the original. These checks do not prove full semantic equivalence. A translated verdict must identify itself as a translation of the current report and retain access to the original. Historical translations have no current authority. Markdown display and export use the same chosen body language, while evidence, snapshots, and structured archives preserve original sources.
+
+## Claim 与可审查证据 / Claims and Reviewable Evidence
+
+可选 `domain_consistency` 附上由确定性重放核验产生的模拟状态回执，并明确 `unverified` 或 `unavailable` 边界；它不判定报告叙事与状态的语义一致性。只要分析带有该回执，`analytic_confidence` 上限就是 `low`。确定性 reducer 可以区分已采纳决策、提案和模型化影响，但不验证现实执行、现实因果或外部事实；翻译必须保留同一回执与披露，不能把它交给模型自由改写。
 
 精确引用支持、语义转述支持、弱支持与未获支持必须分别呈现。引用验证仍要求真实说话者、时序、原文与来源坐标；纯参考碎片和非事实套话不进入事实 Claim 分母。零条强引用不等于全部幻觉，也不能把模型自评当作经证据验证的置信度。
 
 证据入口复用保存的证据与原始 Replay 坐标，区分模拟发言、派生证据、历史访谈片段和外部来源。模拟权重与证据层级不构成现实测量或因果证明。降级提示使用独立 Markdown 段落，不能与正文首句粘连而改变含义。
+
+Optional `domain_consistency` attaches a simulation-state receipt produced by deterministic replay verification and explicitly marks the `unverified` or `unavailable` boundary; it does not judge semantic consistency between the report narrative and state. Any analysis carrying this receipt has an `analytic_confidence` ceiling of `low`. The deterministic reducer can distinguish adopted decisions, proposals, and modeled effects, but it does not verify real execution, real causality, or external facts; translation must preserve the same receipt and disclosure rather than letting the model rewrite them. Exact quotation support, semantic-paraphrase support, weak support, and unsupported Claims stay distinct. Citation verification still requires the real speaker, chronology, original text, and source coordinates. Reference fragments and non-factual boilerplate do not enter the factual-Claim denominator. Zero strong quotations does not mean every Claim is hallucinated, and model self-assessment is not evidence-verified confidence. Evidence views reuse saved evidence and original Replay coordinates while distinguishing simulated speech, derived evidence, historical interview fragments, and external sources. Simulation weights and evidence tiers are not real-world measurement or causal proof. Degradation notices remain separate Markdown paragraphs so they cannot alter the first sentence of the body.

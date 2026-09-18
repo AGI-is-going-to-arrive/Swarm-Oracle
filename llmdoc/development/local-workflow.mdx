@@ -1,5 +1,5 @@
 ---
-description: isolated uv tooling environment 与共享 universal lock 的跨平台初始化、locked wheel-only 同步、loopback 启动、样例 replay 作者约束和 source release signoff。
+description: 本地开发、锁定依赖与源码签收 / Local development, isolated uv tooling, locked wheel-only sync, loopback startup, sample provenance, and source release signoff.
 kind: guide
 relations:
   requires:
@@ -17,6 +17,8 @@ code:
     - README.en.md
     - frontend/package.json
     - frontend/scripts/release-signoff.mjs
+    - frontend/scripts/e2e-node-conversation-live.mjs
+    - frontend/scripts/e2e-suite.mjs
     - frontend/scripts/lib/commandRuntime.mjs
     - scripts/validate_samples.py
     - scripts/build_sample_snapshots.py
@@ -28,19 +30,33 @@ code:
     - docker-compose.yml
 ---
 
-# 本地开发与验证
+# 本地开发与验证 / Local Development and Validation
 
 命令以仓库根目录为起点。Python 应用使用 `backend/.venv`，前端使用 npm 与 `frontend/package-lock.json`。Python/uv 约束以 `backend/pyproject.toml` 为准，Node 兼容范围与 npm 版本以 `frontend/package.json` 为准。本地默认 backend `127.0.0.1:18927`，frontend `127.0.0.1:18928`。
 
 不要把真实 API key 写进命令历史、文档、测试工件或 replay。
 
-## 初始化
+Commands start at the repository root. The Python application uses `backend/.venv`; the frontend uses npm and `frontend/package-lock.json`. `backend/pyproject.toml` defines Python and uv constraints, while `frontend/package.json` defines Node compatibility and npm version. Local defaults are backend `127.0.0.1:18927` and frontend `127.0.0.1:18928`. Real API keys never belong in command history, documentation, test artifacts, or replays.
+
+![本地开发从锁定依赖到隔离浏览器验收](../../docs/illustrations/local-development.zh.webp)
+
+*本地流程共用锁文件，并把源码验证、离线浏览器 fixture 与真实 provider 检查分开。*
+
+> **English diagram details**
+>
+> ![Local development from locked dependencies to isolated browser acceptance](../../docs/illustrations/local-development.en.webp)
+>
+> *The local workflow shares lockfiles while separating source validation, offline browser fixtures, and real-provider checks.*
+
+## 初始化 / Initialization
 
 原生环境、CI 和 Docker 消费同一份已提交的 `backend/uv.lock`。使用锁校验的 `uv sync --directory backend --locked --extra dev --no-build`；不能用跳过过期锁检查的选项代替，也不在目标平台临时解析未锁定构建依赖。没有匹配 wheel 时明确失败。
 
 uv 位于独立 tooling environment，与 `backend/.venv` 及用户已有的根 `.venv` 分开。否则同步应用环境可能删除正在运行的工具，尤其会影响 Windows；不能重建用户根环境来避开这个问题。按照中英文 README 的平台命令安装匹配版本，使用 manifest 固定的 npm，不全局替换宿主工具。环境模板只在目标不存在时复制，不能覆盖已有配置。
 
-## 启动
+Native development, CI, and Docker consume the committed `backend/uv.lock`. Synchronization uses `uv sync --directory backend --locked --extra dev --no-build`; options that skip stale-lock checks or resolve unlocked build dependencies on the target platform are not substitutes. Missing matching wheels fail explicitly. uv lives in an isolated tooling environment separate from `backend/.venv` and any user-owned root `.venv`, preventing application sync from deleting the running tool, especially on Windows. Install the matching version with the platform command in the bilingual README and use the npm pinned by the manifest rather than replacing host tools globally. Copy environment templates only when the destination is absent; never overwrite existing configuration.
+
+## 启动 / Startup
 
 终端 1：`cd backend && source .venv/bin/activate && uvicorn --app-dir . app.main:app --host 127.0.0.1 --port 18927`
 
@@ -58,7 +74,9 @@ Linux 的 host gateway 映射只解决容器名称/地址，不保证宿主仅�
 
 容器验证只能使用本任务创建且可明确归属的容器、网络和卷；无法创建隔离资源是证据阻断，不能转而复用或改动用户正在运行的服务。
 
-## 最小验证
+Run the backend with its virtual environment and Uvicorn on loopback, and run the frontend with `SWARM_BACKEND_URL` on port 18928. Root Make targets provide preflight and convenience startup; a failed preflight exits nonzero, optional capability absence is a warning, and LLM checks probe the exact local URL without sending Authorization for an empty or placeholder key. Native entry points default to loopback. Containers listen inside their network while Compose publishes host ports on loopback. With `SESSION_SECRET`, business APIs require `X-Session-Token`. Preview builds first and proxies `/api` and `/ws`. Docker uses Linux containers; the backend image runs as UID 1000. A legacy root-owned volume is upgraded only through stopped service, verified full `/data` backup, one-time ownership repair, and write verification. The frontend proxy must accommodate the backend 50 MiB snapshot contract plus multipart framing and keep SSE unbuffered, while endpoints retain narrower limits. Public deployment sets production environment, unique session and admin secrets, and correct CORS. Linux host-gateway mapping changes reachability but does not make a loopback-only host LLM accept container traffic; host networking also changes ports and frontend DNS. Container validation uses only resources created and labeled for the task. Failure to create isolation blocks evidence rather than authorizing reuse of a user's running service.
+
+## 最小验证 / Minimal Validation
 
 先跑与改动直接相关的测试，再扩大范围。不要顺手修复无关失败。
 
@@ -74,10 +92,14 @@ Frontend：`cd frontend && npm test -- --run src/<target_test> && npm run lint &
 
 真实 provider 测试不进入默认单元测试。确认本地兼容网关时：`RUN_REAL_LLM_TESTS=1 python -m pytest tests/test_llm_gateway_probe.py -v -s`。HTTP 2xx 中的 error envelope、无可见正文或未形成终态的 stream 都是 provider 失败，不能用本地 fallback 代替上游能力结论。
 
-## 发布签收
+Start with tests directly related to the change and widen only as needed. Backend validation runs focused pytest and Ruff inside `backend/.venv`. Frontend validation runs the focused Vitest target, lint, and `npx tsc -b`; `tsc --noEmit` is not the project-reference gate. Sample and asset checks use their canonical scripts. Official samples come from a catalog and deterministic generator and retain synthetic provenance. Native child branches own only post-fork rounds and inherit the parent prefix; replay carries a self-contained prefix; original message evidence remains verbatim. Metadata cannot repair illegal lineage. All-branch resume does not impersonate a specific actor, while counterfactual actions retain explicit actor requirements. Generator byte checks and validator semantics follow the runtime branch contract. Framework, multipart, metrics, PDF, and HTTP dependency ranges move as a coordinated compatibility and security surface rather than isolated resolver edits. Real-provider tests are excluded from defaults. The opt-in gateway probe treats HTTP 2xx error envelopes, missing visible body text, and streams without a terminal as provider failures; local fallback cannot substitute for upstream capability evidence.
+
+## 发布签收 / Release Signoff
 
 先启动 backend 和 preview，再 `cd frontend && npm run release:signoff -- --url http://127.0.0.1:18930 --headless`。fixture 必须拦截 API、Node backend helper 和同源 WS；未命中 allowlist 的请求应使 suite 失败。`--dry-run` 只记 `planned`，不能作为已执行通过。
 
 release signoff 的 child process 必须保持 argv 边界并使用 `shell:false`；Windows 的 npm/npx 通过已安装 npm 的 JavaScript CLI 启动，不能把 Python/Node/Git 参数交给 `cmd.exe` 重解析。CI 的精确 OS/runtime 矩阵由 workflow 自身负责，不写入稳定知识。
 
 浏览器工件只证明对应 URL、commit、provider 和浏览器组合。不要把旧工件当作当前 HEAD 的签收结果。session 级测试数量、日期、截图目录和修复过程不写入 llmdoc。
+
+Release signoff starts backend and preview, then runs the canonical headless signoff command against port 18930. Its fixture intercepts API, Node backend helpers, and same-origin WebSocket; any non-allowlisted request fails the suite. `--dry-run` records only `planned` and is not execution evidence. Child processes preserve argument boundaries with `shell:false`; on Windows, npm and npx launch through the installed npm JavaScript CLI so Python, Node, and Git arguments are not re-parsed by `cmd.exe`. Browser artifacts prove only their URL, commit, provider, and browser combination. Old artifacts do not sign off current HEAD, and session-specific counts, dates, screenshot paths, and repair history do not belong in stable knowledge.

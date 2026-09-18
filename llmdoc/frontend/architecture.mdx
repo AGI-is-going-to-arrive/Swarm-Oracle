@@ -1,5 +1,5 @@
 ---
-description: 前端 confirmed launch、owner/scope 缓存和迟到响应、Debate 不确定重启、saved-sample 真实导览、当前与历史报告 authority、界面正文导出语言及 legacy Markdown 边界。
+description: 前端确认启动、scope 缓存、对话与结果任务 / Frontend confirmed launch, scoped caches, conversation and graph inspection, result tasks, report authority, and language boundaries.
 kind: architecture
 relations:
   requires:
@@ -52,13 +52,37 @@ code:
     - frontend/src/components/SafeMarkdown.tsx
     - frontend/src/lib/manualChunks.ts
     - frontend/src/pages/result/ResultReportPanel.tsx
+    - frontend/src/components/EndingChatModal.tsx
+    - frontend/src/components/FactionTimeline.tsx
+    - frontend/src/components/kg/NodeConversationSheet.tsx
+    - frontend/src/components/workbench/CausalGraphBoard.tsx
+    - frontend/src/components/workbench/GraphWorkbenchShell.tsx
+    - frontend/src/components/workbench/KGGraphBoard.tsx
+    - frontend/src/hooks/useAgentConversation.ts
+    - frontend/src/hooks/useNodeConversationTransport.ts
+    - frontend/src/pages/KGExplorerView.tsx
+    - frontend/src/pages/ReplayView.tsx
+    - frontend/src/pages/result/AgentRoster.tsx
+    - frontend/src/pages/result/ExploreDeeperBridge.tsx
 ---
 
-# 前端运行时架构
+# 前端运行时架构 / Frontend Runtime Architecture
 
 前端负责把用户操作与服务器 authority 对齐，而不是从缓存或模型文案自行推断结果。路由、依赖和命令以 `App.tsx`、`frontend/package.json` 与 npm lockfile 为准；`npm run build` 使用项目引用的 `tsc -b`，不能用单项目 `tsc --noEmit` 代替完整类型门禁。
 
-## Durable vs 本地状态
+The frontend aligns user actions with server authority instead of inferring results from caches or model prose. `App.tsx`, `frontend/package.json`, and the npm lockfile define routes, dependencies, and commands. `npm run build` uses project-reference `tsc -b`; a single-project `tsc --noEmit` is not an equivalent type gate.
+
+![从阅读结果到追问与改变假设的前端任务流](../../docs/illustrations/read-ask-change.zh.webp)
+
+*共享界面把阅读、询问和改写动作分开，并让每个异步响应保持自己的 owner 与 scope。*
+
+> **English diagram details**
+>
+> ![Frontend task flow from reading results to asking and changing assumptions](../../docs/illustrations/read-ask-change.en.webp)
+>
+> *Shared UI separates reading, asking, and rewriting while keeping every asynchronous response bound to its owner and scope.*
+
+## 持久化与本地状态 / Durable and Local State
 
 Durable truth 来自后端：scenario、branches、messages、status、story、report、`director_state`、`gameplay_state`、Action Ledger、`domain_world` 和 `world_outcomes`。后端显式空数组是 authoritative empty，前端不能用本地旧值回填。director/gameplay 写入使用 revision；冲突时先回读再合并本次增量。
 
@@ -72,15 +96,23 @@ Agent library 的空数组也是有效缓存结果，不能用列表是否非空
 
 不同运行域各有状态适配器，不能假定所有 store 共享一种实现。共同约束是异步请求携带其目标与代次，离开目标或撤销操作后失去提交权限；只移除 loading UI 不足以撤销迟到响应。
 
-## 准备、确认与真实样例
+Conversation transcript、streaming draft 和历史选择是不同状态。共享 Sheet 以 Scenario、owner、origin 和 request epoch 绑定它们；切换用户、节点或历史 turn 时先使旧 stream 失效，迟到 terminal 或 delta 不能复活旧请求、覆盖新历史或清除新草稿。只有服务端已提交的 terminal turn 进入 transcript，partial/aborted 内容保留其真实状态。
+
+Durable truth comes from backend scenarios, branches, messages, status, story, report, director and gameplay state, Action Ledger, domain world, and world outcomes. An explicit empty array is authoritative; local stale values cannot fill it. Director and gameplay writes use revisions and recover conflicts by rereading before merging the current delta. A `full_report_stale: true` report is historical only and cannot overwrite the current verdict, confidence, or Claims. Local state includes caches, planning skeletons, streaming drafts, selections, disclosure, current report-SSE sections, and preferences; none grants owner or settlement authority. Organization ID supplies only `X-Org-Id`, not a signed principal. Agent-library caches bind session owner and request generation, treat empty as fresh, clear on owner changes, reject late success or error, and re-trim selection against authoritative capacity. Every asynchronous adapter carries target and generation; leaving or revoking a target removes commit authority. Conversation transcript, streaming draft, and history selection remain distinct. The shared Sheet binds them to Scenario, owner, origin, and request epoch. Changing user, node, or historical turn invalidates the old stream before any late terminal or delta can revive it, overwrite newer history, or clear a new draft. Only server-committed terminal turns enter the transcript; partial and aborted content retain their real state.
+
+## 准备、确认与真实样例 / Preparation, Confirmation, and Real Samples
 
 Quick Start、教学模板、Local Pack 和挑战选择只准备同一表单，不直接发起推演；替换材料清理过期来源与继承的多次运行设置。Local Pack 的作者文字是有界不可信证据，角色预览不创建或选择有权限的持久化身份。
 
 启动摘要保存实际问题、规模、次数、材料、搜索、provider、语言和 profile 确认令牌。确认执行该对象，不从已经变化的表单重新组装请求；配置漂移要求刷新并重新核对。后台是否保持绑定由 `providers/confirmation.mdx` 的服务器合同保证。
 
+Debate 初次创建和重启都先形成可撤销的只读快照，列出问题、两方角色、裁决者、固定发言阶段、provider、effort 与操作 UUID；只有显式确认才 POST。响应不确定时以同一 payload 和 UUID 重试，取消则回到可编辑草稿；owner 或 session 改变后必须重新核对。
+
 样例导览导入已有结果，不调用模型或启动新推演。进度由实际阅读的合法结局、同一场景与分支对的非空比较结果，以及非空证据抽屉推进；缺少资料或能力提供明确 unavailable/skip。关闭首页引导不等于完成结果导览，空抽屉不能伪造证据步骤完成。
 
-## 实时合同
+Quick Start, teaching templates, Local Packs, and challenge selection prepare one shared form and never launch directly. Replacing material clears stale sources and inherited multi-run settings. Local-Pack author text is bounded untrusted evidence, and character preview does not create or select an authorized durable identity. The launch summary freezes the actual question, scale, run count, material, search, provider, language, and profile confirmation token. Confirmation executes that object rather than rebuilding from an edited form; drift requires refresh and review. Debate creation and restart likewise use a reversible read-only snapshot of the question, roles, judge, fixed speaking phases, provider, effort, and operation UUID. Only explicit confirmation sends POST. An uncertain response retries the same payload and UUID; cancellation returns to the draft, while owner or session changes require review again. Sample tours import existing results without a model call. Progress requires actual reading of a valid ending, a non-empty comparison for two branches of one Scenario, and a non-empty evidence drawer. Missing material yields an explicit unavailable or skip state. Closing homepage onboarding is not tour completion, and an empty drawer cannot fabricate evidence progress.
+
+## 实时合同 / Live Contracts
 
 - 使用首帧认证时 WebSocket 收到 `auth_ok` 后才能 resync；无 token 的本地模式可走其显式恢复分支，不能套用启用认证的前提。
 - `sequence/event_id` 用于去重和 gap 恢复；旧事件不能覆盖新 phase 或终态。
@@ -88,26 +120,47 @@ Quick Start、教学模板、Local Pack 和挑战选择只准备同一表单，�
 - `4001` 和 `4404` 不自动重连；`1006` 可按退避重连。
 - WS host 使用当前页面同源 host，由 dev/preview proxy 转发，不写死 backend 端口。
 - SSE 解析支持多行 `data:`，并在 unmount、切换目标或用户取消时 abort。终态后忽略迟到 delta；错误必须落到可见状态。
+- Conversation transport 以请求 epoch 和 bootstrap identity 隔离 stream。服务端 readiness 的 unknown、unconfigured 和 configured 分开显示；只有同 scope 的 terminal event 才能结束当前 attempt。
 - Simulation live view 只在 `parsing/simulating` 自动同步 director/gameplay；进入终态、replay 或 unmount 必须使排队任务、重试和迟到响应失效，终态展示采用较新的 backend revision，DONE 的 gameplay settlement 继续由 ResultView 与后端 authority 完成。
 - Debate 的停止、删除与事件合流遵守独立粘性终态；读取历史不恢复 worker。不确定 restart 保留原 UUID、选择和令牌后重试，具体持久化与 tombstone 见 `debate/lifecycle.mdx`。
+- Ending Room 的完成展示要求同一 Scenario/room scope 的 `done` snapshot、`result_ready` 与实际 result 同时成立；旧 result 或单独的 done status 不能宣布本次操作完成。
 
-## 结果阅读与语言
+- Under first-frame authentication, WebSocket resync starts only after `auth_ok`; tokenless local mode has its own explicit recovery branch.
+- `sequence/event_id` deduplicates and repairs gaps. Old events cannot overwrite a newer phase or terminal state.
+- `cancelled` is sticky; late status cannot reconnect or return to running.
+- `4001` and `4404` do not reconnect; `1006` may reconnect with backoff.
+- WebSocket uses the current page's host through dev or preview proxies, never a hard-coded backend port.
+- SSE accepts multiline `data:` and aborts on unmount, target change, or user cancellation. Late deltas after a terminal are ignored and errors become visible.
+- Conversation transport isolates streams by request epoch and bootstrap identity. Unknown, unconfigured, and configured readiness are distinct; only a same-scope terminal ends the current attempt.
+- The live Simulation view synchronizes director and gameplay only in `parsing/simulating`. Terminal state, replay, or unmount invalidates queued work, retry, and late response; the newer backend revision wins and ResultView plus backend authority settle DONE gameplay.
+- Debate stop, deletion, and event merge keep their independent sticky terminal state. History does not resume a worker, and uncertain restart retries preserve UUID, choices, and token.
+- Ending Room declares completion only when a `done` snapshot, `result_ready`, and an actual result all belong to the same Scenario and Room scope. Old results or status alone are insufficient.
 
-结果按结论、结局差异、比较/证据与后续操作组织；任意两个不同且存在的世界线以 branch ID 选择。比较、证据、replay 和继续操作分别检查实际能力与资源，深入工具失败不应使已存结果失去可读性。
+## 结果阅读与语言 / Result Reading and Language
+
+结果先按“核验结论、追问角色、改变假设”组织任务；任意两个不同且存在的世界线以 branch ID 选择。比较只读取两条已存世界线，不能冒充反事实改写；反事实编辑器只对当前可写 Scenario 开放。比较、证据、replay 和继续操作分别检查实际能力与资源，深入工具失败不应使已存结果失去可读性。
 
 报告源对象、当前/历史权限及语言投影分别保存。brief 和旧正文可以直接阅读，不自动触发完整分析或翻译；当前译文结论须有有效当前报告，旧快照不能冒充当前 verdict。完整操作、失败保留与原始证据合同见 `results/report-authority.mdx`。
 
 主应用与独立 Gallery 共享轻量语言偏好和 document language 同步：已存偏好优先于浏览器语言，存储不可用不能阻断切换。只有合法机器日期才本地化，人写日期与异常值原样保留。切换 UI 不重写用户问题、姓名、Claim 或原始引文；Markdown 使用同一正文投影并说明保留的原文，snapshot 保持结构化存档语义。
 
-## 分享、Theater 与图谱
+Result work is organized as verify the verdict, ask the actors, and change assumptions. Comparison reads two distinct existing worldlines selected by branch ID and never pretends to rewrite a counterfactual; the counterfactual editor is available only for a currently writable Scenario. Comparison, evidence, replay, and continuation each check their real capability and resources, and deeper-tool failure cannot make saved results unreadable. Source report, current or historical authority, and language projections remain separate. Brief and old prose are directly readable without triggering full analysis or translation; a translated current verdict requires a valid current report. The main app and Gallery share a lightweight language preference and document-language synchronization. Stored preference beats browser language, storage failure cannot block switching, and only valid machine dates are localized. UI language never rewrites user questions, names, Claims, or exact quotations. Markdown uses the same body projection while disclosing preserved source text; snapshots retain structured-archive meaning.
+
+## 分享、Theater 与图谱 / Sharing, Theater, and Graphs
 
 - 新 replay 只保留展示字段，剥离 persona、`agent_identity_id`、凭据和 owner 数据。replay 页不开放 live-only 的 conversation、counterfactual、resume 或 report generation。
 - Public artifact 由后端白名单产生；Gallery 不上传、发布或形成市场。
 - Theater 在 live、replay 和 skip-replay 路径保留 metadata unavailable，不回填 `neutral`。capture 选择器 `.theater-panel` 与 `.phaser-game-container` 是稳定自动化合同。
-- 工作台 graph/KG 读取 scenario 全图；独立 CausalReview 传 `branch_id` 时请求有效根到叶谱系。节点、边和 evidence tier 不能只靠颜色或 tooltip。
+- 工作台 graph/KG 读取 scenario 全图；独立 CausalReview 传 `branch_id` 时请求有效根到叶谱系。节点、边和 evidence tier 不能只靠颜色或 tooltip。选择节点先进入唯一 inspection owner，再由显式 Ask 打开共享 conversation Sheet；桌面分栏与移动 Sheet 都必须让上下文、历史和输入区在有界滚动区域内可达。
 - Verified memory promotion v1 没有前端 capability、开关或证据面。
 
-## 安全与构建
+- New replays retain display fields only and remove persona, `agent_identity_id`, credentials, and owner data. Replay pages do not expose live-only conversation, counterfactual, resume, or report generation.
+- The backend produces Public Artifacts through an allowlist. Gallery neither uploads nor publishes and is not a marketplace.
+- Theater preserves unavailable metadata across live, replay, and skip-replay paths instead of filling `neutral`. `.theater-panel` and `.phaser-game-container` are stable capture selectors.
+- Workbench graph and KG read the Scenario-wide graph, while standalone CausalReview with `branch_id` requests one valid root-to-leaf lineage. Nodes, edges, and evidence tiers cannot rely on color or tooltip alone. Node selection enters one inspection owner; an explicit Ask opens the shared conversation Sheet. Desktop split view and mobile Sheet keep context, history, and input reachable inside bounded scroll regions.
+- Verified memory promotion v1 has no frontend capability, switch, or evidence surface.
+
+## 安全与构建 / Security and Build
 
 - API 错误先经 `sanitizeErrorText`。persona、网页、graph、replay 和 provider 文本用文本节点或 SafeMarkdown。
 - 需要跨语言切换的错误保留公共 status/code，显示时由统一 mapper 本地化；诊断只暴露有界公共字段，不能显示 provider 原文或凭据。
@@ -115,3 +168,10 @@ Quick Start、教学模板、Local Pack 和挑战选择只准备同一表单，�
 - Web Search 的 API key 与自定义 endpoint 绑定当前 provider；切换 provider 时清空这两项和旧校验错误，避免把凭据或 endpoint 复用于另一 provider。
 - SafeMarkdown 始终保留 `rehype-sanitize` 和禁用图片的基线。只有先确认 regex lookbehind 可用后才动态加载 GFM；GFM parser extensions 独立成延迟 chunk，使旧 Safari 仍能解析并阅读普通 Markdown。
 - `frontend/package.json` 是命令真值。production 生成 modern 与 legacy 入口。E2E fixture 必须 fail-closed。
+
+- API errors pass through `sanitizeErrorText`. Persona, web, graph, replay, and provider text render as text nodes or SafeMarkdown.
+- Cross-language errors preserve public status and code and localize through one mapper. Diagnostics expose only bounded public fields, never raw provider content or credentials.
+- Capability states `loading/error/disabled/enabled` remain distinct; probe failure is not feature disablement.
+- Web Search key and custom endpoint belong to the selected provider. Changing providers clears both and their previous validation errors.
+- SafeMarkdown always keeps `rehype-sanitize` and image blocking. GFM loads only after runtime lookbehind support is proven, and parser extensions remain a delayed chunk so older Safari can parse ordinary Markdown.
+- `frontend/package.json` is command authority. Production creates modern and legacy entry points, and E2E fixtures fail closed.

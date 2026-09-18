@@ -1,5 +1,5 @@
 ---
-description: 共享运行生命周期、durable authority、有效分支谱系、精确 lease 与 runtime epoch、跨存储删除和只读导入的写入失败语义。
+description: 共享运行生命周期、领域决策与写入权限 / Shared runtime lifecycle, domain decisions, durable authority, exact leases, cross-store deletion, and fail-closed imports.
 kind: architecture
 relations:
   requires:
@@ -29,6 +29,7 @@ code:
     - backend/app/services/simulation_cancel.py
     - backend/app/services/branch_lineage.py
     - backend/app/services/domain_world.py
+    - backend/app/services/parser.py
     - backend/app/services/simulation_actions.py
     - backend/app/services/action_ledger.py
     - backend/app/services/snapshot_export.py
@@ -38,11 +39,23 @@ code:
     - backend/alembic/versions/040_resource_deletion.py
 ---
 
-# 后端运行时架构
+# 后端运行时架构 / Backend Runtime Architecture
 
 后端使用 FastAPI、SQLModel、SQLite、Alembic、ChromaDB 和 OpenAI-compatible LLM。`backend/app/main.py` 创建应用、挂载 router、配置日志与启动恢复。
 
-## 所有权
+The backend uses FastAPI, SQLModel, SQLite, Alembic, ChromaDB, and an OpenAI-compatible LLM. `backend/app/main.py` creates the application, mounts routers, configures logging, and performs startup recovery.
+
+![后端把领域决策、运行租约与持久化权限分层](../../docs/illustrations/decisions.zh.webp)
+
+*领域 reducer、运行租约和持久化写入各自拥有明确权限。*
+
+> **English diagram details**
+>
+> ![Backend layers for domain decisions, runtime leases, and durable authority](../../docs/illustrations/decisions.en.webp)
+>
+> *Domain reducers, runtime leases, and durable writes each have explicit authority.*
+
+## 所有权 / Ownership
 
 | 表面 | 责任 |
 |---|---|
@@ -61,7 +74,9 @@ code:
 | `backend/app/models/` | SQLModel 表与状态枚举 |
 | `backend/alembic/` | schema 与数据迁移 |
 
-## Durable authority
+The API layer owns REST, SSE, WebSocket, request schemas, sessions, and owner checks. The simulator owns the Scenario loop, branching, narration, progress, and terminal state. Branch lineage is the sole authority for native root-to-leaf rounds, fork boundaries, cutoffs, and replay boundaries. Runtime locks provide shared SQLite leases, renewal, and cross-worker exclusion. Resource deletion coordinates permanent SQLite and Chroma tombstones, cleanup receipts, cross-process locks, retry, and shutdown fencing. Simulation cancellation joins local signals with the durable cancelled state. The LLM client owns provider calls, streaming parsing, rate limits, concurrency, and circuit breaking. Simulation actions validate and append social actions; domain world defines `domain_world_v1` and its deterministic reducer; Action Ledger exposes read-only receipts; result-report services own report IR and Claims; memory and vector storage own Chroma and the disabled-by-default verified-promotion core; models and Alembic own schema and migration.
+
+## 持久化权限 / Durable Authority
 
 | 数据 | Authority | 规则 |
 |---|---|---|
@@ -75,7 +90,9 @@ code:
 | Agent identity | SQLite identity + Chroma memory | owner 在 SQLite；Agent Pack 不是 owner 或记忆 authority |
 | Replay 分享 | `ReplayArtifact` | 只读、脱敏，不承担 owner 或凭据 |
 
-## 运行时不变量
+Scenario status is the lifecycle authority. Branch, Round, and Message rows are durable worldline truth. SimulationAction is append-only with verified, unavailable, or failed status. Only a validator-frozen `parsed_context.domain_world_v1` is domain-schema authority. Director and gameplay JSON use revisions for optimistic concurrency. A complete or partial full report becomes stronger `/story` authority only while its saved result-scope fingerprint matches current durable reducer input and the Scenario is narrating or done; otherwise it is read-only history. ResourceDeletion commits source deletion and a permanent tombstone or pending receipt together before Chroma cleanup. SQLite owns Agent identity and owner scope while Chroma owns memory; Agent Packs carry neither. ReplayArtifact is redacted read-only sharing without owner or credential authority.
+
+## 运行时不变量 / Runtime Invariants
 
 - native 分支按 fork 边界物化不重叠轮次段。self-contained replay 不跨越 replay 边界拼接源分支。谱系非法必须 fail-closed。causal、report、compare、clone 和 checkpoint 使用同一有效轮次选择。
 - 主推演、replay branch、Debate、Ending Room 和 Result Report 使用带租期的 runtime lock。lease 丢失或续租失败时 worker fail-closed。SQLite 短暂 busy 只在原 lease 仍有效时重试。
@@ -87,10 +104,31 @@ code:
 - 发言正文是 durable truth；companion emotion 元数据失败时保留正文并标记 unavailable，不得回填 `neutral`。faction 的 stance/trust 等字段是 affect proxy，不是已验证关系。
 - Decision Envelope 必须来自候选集。IDLE 合法但要有 `idle_reason`。只有 `verified + post_action_v1 + derived_from_durable_actions` 可以绑定目标进度。
 - parser 可让 LLM 提议领域变量，代码只接受最多 8 变量 / 16 规则的 v1 元语言。无合法 schema 时保存显式 unavailable。每轮从同一 N−1 状态确定性裁决 verified durable action。
+- `commitment_state` 只接受冻结的 `set_if_expected + unanimous_round_participants` 采用策略；缺失该策略的旧 schema 不按新规则重放。一次采用要求本轮全部参与者（包括 IDLE 或没有领域 payload 的参与者）从相同 N−1 值提出同一目标；缺席、冲突或非法提案均不改变状态。采用表示模拟中形成一致决策，不表示政策已执行或现实已发生；同一目标只应用一次，多个支持来源的数值归因必须守恒。
+- 发言、COMMENT、背书和引用只提供 provenance，不能独自证明领域变量、单位、目标值或执行结果。领域结果与 Claim 仅使用 reducer 明确建立的 authority；不能因同一 action 被引用就自动建立 Claim 关系。
 - `FEATURE_MEMORY_PROMOTION` 默认 false。gate OFF 时普通推演不读写 v1 Chroma 命名空间。gate ON 时只有与 verified action 精确绑定的结果可晋升。当前没有 capability、REST 或 UI。
 - 用户问题、干预、PDF、persona、网页和历史消息都是不可信数据；prompt 必须用 `format_untrusted_text_block()` 包裹。
 - snapshot、replay、Agent Pack、分享和日志不能携带 API key、Bearer、session secret 或 raw credential URL。
 - snapshot 的活跃 model profile 指针同样不具可移植 authority。未完成来源导入为 cancelled/read_only，活跃分支停止，`worker_resumed=false`；重新运行须是独立显式动作。合法 user_saved 文本可归档保留，但 Room、profile、角色、分支和 identity 的活跃引用被清除。
 - 终局分布只使用 completed terminal leaf branches；fork parent 不参与概率归一。Result Report 自动生成失败不能阻断 `simulation_done`。
 
+- Native branches materialize non-overlapping round segments at fork boundaries. Self-contained replay never crosses its replay boundary to splice source history. Invalid lineage fails closed, and causal, report, compare, clone, and checkpoint consumers share one valid-round selector.
+- Main simulation, replay branch, Debate, Ending Room, and Result Report use expiring runtime locks. Lost or unrenewed leases fail closed; transient SQLite busy errors retry only while the original lease remains valid.
+- Before a managed simulation inserts a Round, it reserves the SQLite writer and revalidates Scenario and branch writability plus the exact simulation lease in the same transaction.
+- Result Report binds a versioned result-scope fingerprint, exact report lease, and runtime epoch. Every payload write rechecks them with Scenario state inside one serialized transaction and saves payload plus fingerprint atomically.
+- Scenario or identity deletion commits source removal with a permanent tombstone and pending receipt, then cleans Chroma outside the SQLite transaction. Lock files remain stable. POSIX uses `fcntl.flock`, Windows uses `msvcrt.locking`; tombstones reject new writers and failed cleanup stays pending.
+- Explicit shutdown advances the runtime epoch once when moving from running to stopping and waits for admitted writers. Database flush occurs before acquiring the shutdown mutex, and only an authorized real COMMIT holds it to transaction end. A cancelled asyncio wrapper does not release a native Chroma resource lock until the synchronous call actually returns.
+- Scenario cancellation serializes `cancelled`, unfinished branches, and pending intervention receipts before notifying the local task. Workers check both local token and database, and late stages cannot overwrite a terminal. Scenario and Debate cancellation contracts remain distinct.
+- Speech text is durable truth. Failed companion-emotion metadata remains unavailable rather than `neutral`; faction stance and trust are affect proxies, not verified relationships.
+- A Decision Envelope comes from its candidate set. IDLE is valid with an `idle_reason`. Only `verified + post_action_v1 + derived_from_durable_actions` may bind target progress.
+- The parser may propose at most eight variables and sixteen rules in the v1 domain language; fixed code validates it or records unavailable. Every round deterministically adjudicates verified durable actions from one N−1 state.
+- `commitment_state` accepts only frozen `set_if_expected + unanimous_round_participants` adoption. A legacy schema without that policy is not replayed under the new rule. Adoption requires every round participant, including IDLE or no-domain-payload participants, to propose the same target from the same N−1 value. Missing, conflicting, or invalid proposals leave state unchanged. Adoption means simulated consensus, not execution or real occurrence; one target applies once and numerical attribution across sources is conserved.
+- Speech, COMMENT, endorsement, and citation provide provenance only. They cannot establish domain variables, units, targets, execution, or Claim relations without explicit reducer authority.
+- `FEATURE_MEMORY_PROMOTION` defaults false. When off, normal simulation neither reads nor writes the v1 Chroma namespace. When on, only results exactly bound to verified actions may be promoted; no capability, REST, or UI surface exists.
+- Questions, interventions, PDFs, personas, web pages, and historical messages are untrusted and enter prompts through `format_untrusted_text_block()`.
+- Snapshots, replays, Agent Packs, shares, and logs exclude API keys, Bearer tokens, session secrets, and credential-bearing URLs. Snapshot model-profile pointers are not portable authority. Unfinished imports become cancelled read-only history with stopped branches and `worker_resumed=false`; a rerun is a new explicit action. Valid `user_saved` text may remain archived while active Room, profile, role, branch, and identity references are cleared.
+- Final distributions include completed terminal leaf branches only; fork parents do not enter normalization. Automatic Result Report failure cannot block `simulation_done`.
+
 报告深度、翻译与源报告比较写入由 `results/report-authority.mdx` 负责；模型确认策略由 `providers/confirmation.mdx` 负责。它们使用此处共享写入权限，不能各自构造较弱的 lease、删除或分支选择规则。
+
+`results/report-authority.mdx` owns report depth, translation, and source-report comparison. `providers/confirmation.mdx` owns model confirmation. Both consume the shared write authority defined here and cannot invent weaker lease, deletion, or branch-selection rules.

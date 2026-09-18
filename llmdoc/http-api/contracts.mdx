@@ -1,5 +1,5 @@
 ---
-description: REST 公共错误、signed-session 与本地 owner 语义、各资源取消和删除差异、报告当前性、只读 snapshot 及 SSE/WebSocket 终态合同。
+description: REST、SSE 与 WebSocket 的 owner、scope 和终态 / Owner, scope, conversation lease, replay cursor, report authority, snapshot, and terminal contracts.
 kind: reference
 relations:
   requires:
@@ -22,17 +22,34 @@ code:
     - backend/app/api/debate.py
     - backend/app/api/experiments.py
     - backend/app/api/social.py
+    - backend/app/api/conversation.py
+    - backend/app/api/replay_trace.py
+    - backend/app/services/conversation_service.py
 ---
 
-# REST、SSE 与 WebSocket 合同
+# REST、SSE 与 WebSocket 合同 / REST, SSE, and WebSocket Contracts
 
 后端默认地址是 `http://127.0.0.1:18927`。完整字段以 `backend/app/api/`、`backend/app/api/schemas.py` 和 OpenAPI 为准。`/docs`、`/redoc`、`/openapi.json` 默认关闭；本地设置 `EXPOSE_API_DOCS=true` 后可读完整 schema。
 
-## 错误与功能开关
+The backend defaults to `http://127.0.0.1:18927`. `backend/app/api/`, `backend/app/api/schemas.py`, and OpenAPI define exact fields. `/docs`, `/redoc`, and `/openapi.json` are disabled by default; local `EXPOSE_API_DOCS=true` exposes the complete schema.
+
+![HTTP、流式传输与所有权边界](../../docs/illustrations/privacy-sharing.zh.webp)
+
+*接口合同把 signed owner、资源 scope、流终态和只读分享分开。*
+
+> **English diagram details**
+>
+> ![HTTP, streaming, and ownership boundaries](../../docs/illustrations/privacy-sharing.en.webp)
+>
+> *The API contract separates signed ownership, resource scope, streaming terminals, and read-only sharing.*
+
+## 错误与功能开关 / Errors and Feature Gates
 
 业务错误使用 `{ "detail": { "code", "message" } }`。Pydantic 参数错误保留框架 `422`。未知服务端错误收口为安全通用错误，响应不能包含 stack、密钥或 provider 原文。功能关闭时受 gate 的 endpoint 返回 `404 FEATURE_DISABLED` 或域内等价错误，不执行副作用。
 
-## 鉴权与 owner
+Business errors use `{ "detail": { "code", "message" } }`; Pydantic validation retains framework `422`. Unknown server failures collapse to a safe generic error and never expose stacks, secrets, or raw provider text. A gated endpoint returns `404 FEATURE_DISABLED` or its domain equivalent without side effects.
+
+## 鉴权与所有者 / Authentication and Owner
 
 - `SESSION_SECRET=""` 时本地业务路由跳过 session gate，`user_id` 由本地调用提供；这不提供多用户隔离。
 - 配置后业务 REST 要求 `X-Session-Token`。裸 secret 只通过全局 gate，不携带用户身份。
@@ -42,39 +59,73 @@ code:
 - Room/thread 通过所属 Scenario 校验 owner；报告与保存分析也必须经过该资源边界。Replay、profile 令牌、导入 owner 字段或显示名称均不能取代 principal。
 - `X-Session-Token` 只用于 REST。WebSocket 使用首帧 auth。`/` 公开；`/metrics` 接受 admin token，或已启用 session gate 时的 session token。
 
-## Scenario 生命周期
+- With `SESSION_SECRET=""`, local business routes skip the session gate and accept a caller-supplied `user_id`; this is not multi-user isolation.
+- Once configured, business REST requires `X-Session-Token`. A bare secret passes only the global gate and carries no user identity.
+- A signed principal is `v1.<payload>.<signature>` and its payload `sub` is the owner subject. Owner-sensitive routes require it or return `SESSION_PRINCIPAL_REQUIRED`.
+- A body or query `user_id` that differs from `sub` returns `SESSION_PRINCIPAL_MISMATCH`.
+- Missing and cross-owner resources share the same 404.
+- Room and thread ownership derives from their Scenario. Reports and saved analysis cross the same boundary. Replays, profile tokens, imported owner fields, and display names cannot replace the principal.
+- `X-Session-Token` is REST-only; WebSocket authenticates in its first frame. `/` is public. `/metrics` accepts an admin token or, when the session gate is enabled, a session token.
+
+## Scenario 生命周期 / Scenario Lifecycle
 
 - `POST /api/scenario` 校验问题、运行参数、BYOK、profile、自定义 Agent、可选搜索和 `initial_social_feed`，再启动后台任务。
-- `GET /api/scenario/{id}` 返回 durable status 和 always-shaped `domain_world`。
+- `GET /api/scenario/{id}` 返回 durable status、always-shaped `domain_world` 与该 Scenario/provider scope 的 conversation readiness。readiness 的 `true/false/null` 分别表示可用、已知未配置、未知；探针或解析失败不能伪装成已关闭。
 - `GET /story` 只有在 `full_report.status` 为 `complete/partial`、headline 可用、scenario 为 `narrating/done`，且保存的结果范围指纹与当前 durable 报告输入一致时，才用报告编译结论覆盖旧模型自评。旧版未绑定或范围已变化的报告以 `full_report_stale: true` 返回，只作可读历史，不提供当前 verdict、confidence 或 world-outcome Claim authority。
 - `POST /cancel` 只接受 `parsing/simulating/narrating/cancelled`。先持久化 `cancelled` 再取消本进程 task。`done/error` 返回 `409 SIMULATION_NOT_RUNNING`。
 - 删除 scenario 先原子移除 SQLite 运行数据并写入永久 deletion receipt，再清理关联 Chroma/identity-source 数据。清理完成返回 200 `{status:"deleted", scenario_id}`；仍待后台重试返回 202，并增加 `cleanup_pending:true`。个人 journal 保留，关联 `scenario_id` 置空。
 - 删除 workshop custom identity 会移除 live identity、campaign/growth 关联并把历史 scenario Agent 快照与 identity 解耦；历史名字、persona 和消息保留。向量清理完成返回 204；仍待后台重试返回 202 `{status:"deleted", identity_id, cleanup_pending:true}`。generated identity 仍不可从该入口删除。
 
-## BYOK
+`POST /api/scenario` validates the question, run parameters, BYOK, profile, custom Agents, optional search, and `initial_social_feed` before scheduling work. `GET /api/scenario/{id}` returns durable status, an always-shaped `domain_world`, and conversation readiness within that Scenario/provider scope; `true`, `false`, and `null` mean configured, known unconfigured, and unknown. Probe or resolution failure cannot masquerade as disabled. `/story` accepts a report verdict only when status, headline, Scenario state, and current result-scope fingerprint all qualify; stale reports remain readable history without current verdict, confidence, or world-outcome Claim authority. Scenario cancellation persists `cancelled` before notifying the local task and rejects `done/error` with `409 SIMULATION_NOT_RUNNING`. Scenario deletion atomically removes SQLite data and writes a permanent deletion receipt before Chroma cleanup; it returns 200 when complete or 202 with `cleanup_pending` while retry remains. Journal entries survive with a cleared Scenario link. Deleting a workshop custom identity removes live identity and growth links, detaches historical Agent snapshots while preserving names, persona, and messages, and uses 204 or cleanup-pending 202. Generated identities are not deletable through that entry point.
+
+## BYOK / Bring Your Own Key
 
 远端业务请求显式传 `llm_base_url` 时必须同时传 API key；精确本地 provider 可免 key。profile id 按当前 owner 解析，响应不回显 API key。partial override fail-closed。已提供的确认令牌必须在预检和创建副作用前匹配当前配置，漂移返回 `MODEL_PROFILE_CHANGED`；旧程序接口的可选令牌不等于所有入口都强制确认。绑定和后续继承见 `providers/confirmation.mdx`，URL 规则见 `config/runtime.mdx`。
 
-## 独立操作边界
+An explicit remote `llm_base_url` requires an API key; exact local providers may be keyless. Profile IDs resolve under the current owner and responses never echo keys. Partial overrides fail closed. A supplied confirmation token must match before preflight or creation side effects, with drift returning `MODEL_PROFILE_CHANGED`; optional tokens on legacy interfaces do not imply universal confirmation. Provider binding and inheritance belong to `providers/confirmation.mdx`, and URL rules to `config/runtime.mdx`.
+
+## 独立操作边界 / Independent Operation Boundaries
 
 - 报告请求明确区分 generate 与 translate，以及 brief 与 full；translate 必须提供目标语言并绑定当前可读源报告。新操作要求已完成 Scenario，旧报告的可读性不授予重新生成权限。
 - 保存分析使用有界 `user_saved` 记录和内容一致的结果 ID 幂等，不能把客户端任意 JSON 写成报告或身份记忆。
 - Debate restart 创建新记录，以持久化 UUID receipt 防重复。取消返回实际终态；删除后的请求 tombstone 阻止旧意图复活。Scenario 的取消冲突与向量清理 202 语义保持独立。
+- Replay 分页 cursor 必须属于同一 Scenario、实际 replay 分支和当前 root filter；合法 UUID 本身不足以成为续页 authority。
 
-## SSE
+- Report requests distinguish generate from translate and brief from full. Translation supplies a target language and binds a readable source report. New operations require a completed Scenario; readable history does not grant regeneration rights.
+- Saved analysis uses bounded `user_saved` records and content-consistent result-ID idempotency. Arbitrary client JSON cannot become a report or identity memory.
+- Debate restart creates a new record guarded by a durable UUID receipt. Cancellation returns its real terminal state, and request tombstones prevent resurrection after deletion. Its semantics remain separate from Scenario cancellation conflicts and vector-cleanup 202 responses.
+- A Replay cursor belongs to the same Scenario, actual replay branch, and current root filter. A valid UUID alone is not continuation authority.
+
+## 对话轮次 / Conversation Turn
+
+Conversation thread 和 turn 的 origin 由后端依据 Scenario、节点类型、节点、分支和轮次重新水合；客户端标签或旧缓存不能创建跨 scope 对话。创建和继续 turn 都要验证当前 owner 与 origin 仍可达。
+
+进行中的 assistant turn 使用 durable lease：运行者每 30 秒检查权限并续写 heartbeat，只有超过 5 分钟未活动的 turn 才能由新请求通过 compare-and-set 收割。收割先持久化 `aborted` 再释放 thread 指针，原 worker 的迟到 delta 不得恢复该 turn，也不得覆盖新 turn。
+
+每个 turn 最多产生一个 durable SSE 终态：`turn_completed`、`turn_error` 或 `turn_aborted`。取消、删除、provider failure、失活收割和客户端断开都保留已有 partial text 与真实终态；历史只返回当前 owner 下已提交的 turn，不把 streaming draft 当作完成回复。
+
+The backend rehydrates thread and turn origin from Scenario, node type, node, branch, and round. Client labels and stale caches cannot create cross-scope conversations, and creation or continuation revalidates current owner and reachable origin. An in-progress assistant turn has a durable lease: its worker checks authority and refreshes heartbeat every 30 seconds, while a new request may reap it through compare-and-set only after more than five minutes of inactivity. Reaping persists `aborted` before releasing the thread pointer. Late deltas from the old worker cannot revive the turn or overwrite a new one. Each turn emits at most one durable SSE terminal: `turn_completed`, `turn_error`, or `turn_aborted`. Cancellation, deletion, provider failure, stale-turn reaping, and client disconnect preserve partial text and the true terminal state. History returns committed turns for the current owner, never a streaming draft as a completed answer.
+
+## SSE / Server-Sent Events
 
 | Endpoint | 终态约束 |
 |---|---|
-| conversation turn | abort、delete 和 provider failure 都必须产生明确终态；客户端断开后不得用迟到 delta 恢复完成态 |
+| conversation turn | 每次仅一个 completed/error/aborted 终态；abort、delete、失活收割和 provider failure 保留 partial text，迟到 delta 不得恢复完成态 |
 | report generate / translate | 本次请求失败与已保存内容分开；迟到写入须通过范围和 lease 检查。自动路径 fail-soft，不能阻断 scenario `done` |
 | survey | 单个代表失败写入该 response，不升级整个流 |
 
-## WebSocket
+For conversation streams, exactly one completed, error, or aborted terminal is durable, and abort, deletion, reaping, or provider failure preserves partial text. Report generate and translate attempts keep failure separate from saved content; late writes must pass scope and lease checks, and the automatic path is fail-soft. Survey records a failed representative in that response rather than failing the whole stream.
+
+## WebSocket / WebSocket Sessions
 
 路径：`/ws/scenario/{id}`、`/ws/debate/{id}`、`/ws/agent-conversation/{thread_id}`、`/ws/ending-room/{room_id}`。
 
 启用 `SESSION_SECRET` 时：accept 前预留 pending-auth；客户端 10 秒内发送不超过 64 KiB 的 `{"type":"auth","token"}`；验证资源和 owner 后发送 `auth_ok` 再注册连接。失败用 `4001`，资源/owner/feature 用 `4404`；两者不重连。`1006` 可重连。所有入站文本 64 KiB UTF-8 上限。`cancelled` 是粘性终态。
 
-## Snapshot 输入
+WebSocket paths are `/ws/scenario/{id}`, `/ws/debate/{id}`, `/ws/agent-conversation/{thread_id}`, and `/ws/ending-room/{room_id}`. With `SESSION_SECRET` enabled, pending authentication is reserved before accept. Within ten seconds the client sends at most 64 KiB of `{"type":"auth","token"}`. The server validates resource and owner, emits `auth_ok`, then registers the connection. Authentication failure uses `4001`; missing resource, wrong owner, or disabled feature uses `4404`; neither reconnects. `1006` may reconnect with backoff. Every inbound text frame is limited to 64 KiB UTF-8, and `cancelled` is sticky.
+
+## Snapshot 输入 / Snapshot Input
 
 `POST /api/scenario/import-snapshot` fail-closed：上传不超过 50 MiB，member 路径安全，manifest/checksum 一致，外键 remap 失败则整包失败。pending intervention 不随 snapshot 恢复；凭据、token、base URL、活跃 profile 指针和 owner 数据不导出。未完成来源导入为停止的只读历史，不安排原 worker；公开 `snapshot_import` 仅投影允许的状态和恢复说明字段。
+
+`POST /api/scenario/import-snapshot` fails closed: uploads are at most 50 MiB, member paths are safe, manifest and checksums agree, and any foreign-key remap failure rejects the whole archive. Pending interventions are not restored. Credentials, tokens, base URLs, active profile pointers, and owner data are not exported. An unfinished source imports as stopped read-only history without scheduling its worker; public `snapshot_import` exposes only allowed status and recovery-description fields.
