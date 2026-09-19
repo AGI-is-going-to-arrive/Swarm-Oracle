@@ -16,6 +16,7 @@ const {
   resetStoreMock,
   translateMock,
   useCapabilityCheckMock,
+  languageState,
 } = vi.hoisted(() => ({
   getScenarioMock: vi.fn(),
   getCounterfactualCompareMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   captureElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare'),
   captureCompositeElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare-composite'),
   useCapabilityCheckMock: vi.fn(() => ({ loading: false, enabled: true, capabilities: null, error: null })),
+  languageState: { value: 'en' },
   translateMock: (key: string, fallbackOrOpts?: string | Record<string, unknown>, maybeOpts?: Record<string, unknown>) => {
     const opts = typeof fallbackOrOpts === 'object' && fallbackOrOpts !== null
       ? fallbackOrOpts
@@ -188,7 +190,7 @@ vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => {} },
   useTranslation: () => ({
     t: translateMock,
-    i18n: { changeLanguage: vi.fn(), language: 'en' },
+    i18n: { changeLanguage: vi.fn(), language: languageState.value },
   }),
 }));
 
@@ -215,6 +217,7 @@ async function importMockApiError(): Promise<new (status: number, code: string, 
 }
 
 beforeEach(() => {
+  languageState.value = 'en';
   getScenarioMock.mockReset();
   getCounterfactualCompareMock.mockReset();
   resimulateCounterfactualMock.mockReset();
@@ -246,6 +249,35 @@ describe('CompareDigestView', () => {
       rounds: [{ round: 1, branch_a_summary: 'First saved summary', branch_b_summary: 'Second saved summary', branch_a_messages: [], branch_b_messages: [], divergence_score: 0.5, is_identical: false }],
     });
   }
+
+  it('localizes emotions in both comparison panes and a one-sided round', async () => {
+    languageState.value = 'zh-CN';
+    mockGuideComparison();
+    getCounterfactualCompareMock.mockResolvedValueOnce({
+      scenario_id: 'test-id', branch_a: 'a', branch_b: 'b', common_rounds: 0, intervention: null,
+      rounds: [
+        {
+          round: 1, branch_a_summary: 'First', branch_b_summary: 'Second', divergence_score: 0.5, is_identical: false,
+          branch_a_messages: [{ agent_id: 'one', agent_name: 'First', content: 'One choice', emotion: 'neutral' }],
+          branch_b_messages: [{ agent_id: 'two', agent_name: 'Second', content: 'Another choice', emotion: 'happy' }],
+        },
+        {
+          round: 2, branch_a_summary: 'Continued', branch_b_summary: '', divergence_score: 0.5, is_identical: false,
+          branch_a_messages: [
+            { agent_id: 'one', agent_name: 'First', content: 'Next step', emotion: 'calm' },
+            { agent_id: 'one', agent_name: 'First', content: 'A personal description', emotion: 'quiet but still uncertain' },
+          ],
+          branch_b_messages: [],
+        },
+      ],
+    });
+
+    const view = renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+    await screen.findByText('Saved comparison');
+
+    expect(Array.from(view.container.querySelectorAll('.compare-message__emotion'), (node) => node.textContent))
+      .toEqual(['中性', '愉快', '平静', 'quiet but still uncertain']);
+  });
 
   it.each([
     { name: 'ordinary branches', reverse: false, aSource: null, bSource: null, aKind: null, bKind: null, proven: false },

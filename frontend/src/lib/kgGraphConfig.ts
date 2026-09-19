@@ -55,6 +55,7 @@ export const NODE_HALO_STROKE = { dark: '#f8fafc', light: '#0f172a' } as const;
 
 export const EDGE_TYPE_LABEL_I18N: Record<string, [string, string]> = {
   caused: ['causal.edge_caused', 'caused'],
+  led_to: ['causal.edge_led_to', 'leads to'],
   supports: ['causal.edge_supports', 'supports'],
   temporal: ['causal.edge_temporal', 'temporal'],
   rebuts: ['causal.edge_rebuts', 'rebuts'],

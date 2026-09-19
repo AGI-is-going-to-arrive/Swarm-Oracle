@@ -144,6 +144,16 @@ function makeGraph(nodeCount: number): GraphPayload {
 }
 
 describe('toKgG6Data', () => {
+  it('localizes runtime outcome edges through the shared causal label', () => {
+    const graph = makeGraph(2);
+    graph.edges[0].type = 'led_to';
+    const result = toKgG6Data(graph, {
+      t: (key, fallback) => key === 'causal.edge_led_to' ? '导向' : fallback,
+    });
+    expect(result.edges[0].style?.labelText).toBe('导向');
+    expect(toKgG6Data(graph).edges[0].style?.labelText).toBe('leads to');
+  });
+
   it('maps all nodes and edges without options', () => {
     const graph = makeGraph(3);
     const result = toKgG6Data(graph);
@@ -446,11 +456,11 @@ describe('KG_DEGRADE_THRESHOLDS edgeLabelLimit', () => {
 // ── Add-S1: EDGE_TYPE_LABEL_I18N ──────────────────────────
 
 describe('EDGE_TYPE_LABEL_I18N', () => {
-  it('contains exactly 10 edge type keys', () => {
+  it('covers all 11 supported edge types, including runtime outcomes', () => {
     const keys = Object.keys(EDGE_TYPE_LABEL_I18N);
-    expect(keys).toHaveLength(10);
+    expect(keys).toHaveLength(11);
     expect(keys).toEqual(expect.arrayContaining([
-      'caused', 'supports', 'temporal', 'rebuts', 'attacks', 'accepted', 'unaddressed',
+      'caused', 'led_to', 'supports', 'temporal', 'rebuts', 'attacks', 'accepted', 'unaddressed',
       'responds_to', 'supports_stance', 'opposes_stance',
     ]));
   });

@@ -43,6 +43,7 @@ let mockState: {
   branches: BranchInfo[];
   messages: AgentMessage[];
 };
+let mockLanguage = 'zh';
 
 vi.mock('../stores/simulationStore', () => ({
   useSimulationStore: (selector: (state: typeof mockState) => unknown) => selector(mockState),
@@ -50,6 +51,7 @@ vi.mock('../stores/simulationStore', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: { language: mockLanguage },
     t: (key: string, vars?: Record<string, string | number>) => {
       const labels: Record<string, string> = {
         'sim.panel.agent_list': 'Agent 列表',
@@ -68,6 +70,7 @@ vi.mock('react-i18next', () => ({
         'sim.panel.worldline_round_range': `R${vars?.start ?? ''}-R${vars?.end ?? ''}`,
         'sim.panel.view_agent_profile': `查看 ${vars?.name ?? ''} 的档案`,
         'sim.panel.emotion_metadata_unavailable': '情绪元数据不可用',
+        'sim.panel.emotion_label': `${mockLanguage.startsWith('zh') ? '情绪：' : 'Emotion: '}${vars?.emotion ?? ''}`,
         'sim.panel.new_messages': `${vars?.count ?? 0} 条新消息`,
         'sim.panel.jump_to_latest': '跳至最新消息',
       };
@@ -77,6 +80,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 beforeEach(() => {
+  mockLanguage = 'zh';
   Element.prototype.scrollIntoView = vi.fn();
   mockState = {
     agents: [sam, zhou],
@@ -96,6 +100,31 @@ beforeEach(() => {
 });
 
 describe('AgentPanel', () => {
+  it('localizes known Chinese stances in English without rewriting an authored stance', () => {
+    mockLanguage = 'en';
+    mockState.agents = [
+      { ...sam, role: 'Planner', stance: '支持' },
+      { ...zhou, role: 'Reviewer', stance: '支持先小范围试用' },
+    ];
+    mockState.messages = [];
+
+    render(<AgentPanel />);
+
+    expect(screen.getByText('Planner · Supportive')).toBeInTheDocument();
+    expect(screen.getByText('Reviewer · 支持先小范围试用')).toBeInTheDocument();
+    expect(screen.getAllByTitle('Neutral')).toHaveLength(2);
+    expect(screen.getAllByLabelText('Emotion: Neutral')).toHaveLength(2);
+  });
+
+  it('labels neutral emotion in Chinese in both the tooltip and accessible name', () => {
+    render(<AgentPanel />);
+
+    expect(screen.getAllByTitle('中性')).toHaveLength(2);
+    expect(screen.getAllByLabelText('情绪：中性')).toHaveLength(2);
+    expect(screen.getByText('核心')).toBeInTheDocument();
+    expect(screen.queryByTitle('neutral')).not.toBeInTheDocument();
+  });
+
   function scrollFeed(container: HTMLElement, top: number, height = 1000): HTMLDivElement {
     const list = container.querySelector<HTMLDivElement>('.message-list')!;
     Object.defineProperties(list, {

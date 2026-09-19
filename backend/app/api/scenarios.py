@@ -2712,15 +2712,11 @@ async def get_story(
             else None
         )
         from app.services.result_report.queries import (
-            REPORT_SCOPE_FINGERPRINT_KEY,
-            report_result_fingerprint,
+            current_report_verdict,
+            report_result_is_stale,
         )
 
-        full_report_stale = isinstance(full_report, dict) and (
-            scenario.status not in {ScenarioStatus.NARRATING, ScenarioStatus.DONE}
-            or parsed_context.get(REPORT_SCOPE_FINGERPRINT_KEY)
-            != report_result_fingerprint(session, scenario_id)
-        )
+        full_report_stale = report_result_is_stale(session, scenario, full_report)
         raw_branch_answers = result_quality.get("branch_question_answers")
         branch_question_answers = raw_branch_answers if isinstance(raw_branch_answers, dict) else {}
         verdict_text = str(result_quality.get("verdict") or "").strip() or None
@@ -2748,36 +2744,17 @@ async def get_story(
         # A terminal compiled report is the stronger confidence authority. Its
         # analytic confidence is evidence-derived and includes an explanation;
         # do not show a conflicting model self-rating above it.
-        if (
-            isinstance(full_report, dict)
-            and not full_report_stale
-            and full_report.get("status") in {"complete", "partial"}
-            and full_report.get("target_branch_id") in {branch.id for branch in branches}
-        ):
-            report_verdict = full_report.get("verdict")
-            report_headline = (
-                str(report_verdict.get("headline_answer") or "").strip()
-                if isinstance(report_verdict, dict)
-                else ""
-            )
-            report_confidence = (
-                report_verdict.get("analytic_confidence")
-                if isinstance(report_verdict, dict)
-                else None
-            )
-            report_level = (
-                _normalize_result_verdict_confidence(report_confidence.get("level"))
-                if isinstance(report_confidence, dict)
-                else None
-            )
-            if report_headline:
-                # Text and confidence must describe the same compiled Claim.
-                # Never attach report-derived confidence to result_quality text.
-                verdict_text = report_headline
-                verdict_confidence = report_level
-                # Existing clients understand null as analytic/report-derived;
-                # keep the frozen public union rather than adding a new enum.
-                verdict_confidence_kind = None
+        report_verdict = current_report_verdict(
+            full_report,
+            stale=full_report_stale,
+            eligible_branch_ids={branch.id for branch in branches},
+        )
+        if report_verdict is not None:
+            verdict_text = report_verdict.headline_answer
+            verdict_confidence = report_verdict.confidence
+            # Existing clients understand null as analytic/report-derived;
+            # keep the frozen public union rather than adding a new enum.
+            verdict_confidence_kind = None
 
         return {
             "scenario_id": scenario_id,

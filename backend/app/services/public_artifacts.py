@@ -11,8 +11,15 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlmodel import Session, select
 
+from app.config import settings
 from app.log_sanitize import _scrub_sensitive_text
 from app.models import Agent, AgentMessage, Branch, BranchStatus, Round, Scenario
+from app.services.result_report.queries import (
+    CurrentReportVerdict,
+    current_report_verdict,
+    report_result_is_stale,
+)
+from app.services.result_report.schema import full_report_for_story
 
 PUBLIC_ARTIFACT_SCHEMA_VERSION_V1 = "public_artifact.v1"
 PUBLIC_ARTIFACT_SCHEMA_VERSION_V2 = "public_artifact.v2"
@@ -176,6 +183,20 @@ def _clean_text(value: Any, *, max_chars: int) -> str:
     return text
 
 
+def _question_excerpt(value: Any) -> str:
+    text = _clean_text(value, max_chars=-1)
+    if len(text) <= MAX_QUESTION_CHARS:
+        return text
+    excerpt = text[:MAX_QUESTION_CHARS - 1]
+    if re.match(r"[A-Za-z0-9]", excerpt[-1]) and re.match(
+        r"[A-Za-z0-9]", text[MAX_QUESTION_CHARS - 1],
+    ):
+        boundary = excerpt.rfind(" ")
+        if boundary > 0:
+            excerpt = excerpt[:boundary]
+    return excerpt.rstrip() + "…"
+
+
 def _clean_language(value: Any, question: str) -> str:
     raw = _clean_text(value, max_chars=MAX_LANGUAGE_CHARS).lower()
     if raw.startswith("zh") or raw in {"chinese", "mandarin", "中文"}:
@@ -185,17 +206,6 @@ def _clean_language(value: Any, question: str) -> str:
     if re.search(r"[\u3400-\u9fff]", question):
         return "zh"
     return "en"
-
-
-def _clean_confidence(value: Any) -> Literal["high", "medium", "low"] | None:
-    raw = _clean_text(value, max_chars=16).lower()
-    if raw == "high":
-        return "high"
-    if raw == "medium":
-        return "medium"
-    if raw == "low":
-        return "low"
-    return None
 
 
 def _clean_probability(value: Any) -> float:
@@ -337,9 +347,9 @@ def _branch_rows(branches: list[Any]) -> tuple[list[dict[str, Any]], dict[str, i
 def _branch_verdicts(
     data: Mapping[str, Any],
     branches: list[dict[str, Any]],
+    report_verdict: CurrentReportVerdict | None,
 ) -> list[dict[str, Any]]:
     answers = _branch_answers(data)
-    confidence = _clean_confidence(_result_quality(data).get("confidence"))
     scenario_verdict = _clean_text(
         _result_quality(data).get("verdict"),
         max_chars=MAX_VERDICT_CHARS,
@@ -348,6 +358,12 @@ def _branch_verdicts(
     for branch in branches:
         answer = _clean_text(answers.get(branch["id"]), max_chars=MAX_VERDICT_CHARS)
         verdict = answer or branch["insight"] or scenario_verdict
+        # v2 cannot describe model self-rating provenance. Only a current
+        # report can attach analytic confidence, and only to its own Claim.
+        confidence = None
+        if report_verdict is not None and branch["id"] == report_verdict.target_branch_id:
+            verdict = _clean_text(report_verdict.headline_answer, max_chars=MAX_VERDICT_CHARS)
+            confidence = report_verdict.confidence
         verdicts.append(
             {
                 "branch_index": branch["index"],
@@ -424,9 +440,13 @@ def _transcript_excerpts(
     return excerpts
 
 
-def build_public_artifact_from_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
+def build_public_artifact_from_mapping(
+    data: Mapping[str, Any],
+    *,
+    report_verdict: CurrentReportVerdict | None = None,
+) -> dict[str, Any]:
     """Build a public artifact from an explicit whitelist of scenario fields."""
-    question = _clean_text(data.get("question"), max_chars=MAX_QUESTION_CHARS)
+    question = _question_excerpt(data.get("question"))
     parsed_context = _parsed_context(data)
     language = _clean_language(
         data.get("language") or parsed_context.get("_language"),
@@ -439,7 +459,7 @@ def build_public_artifact_from_mapping(data: Mapping[str, Any]) -> dict[str, Any
         "question": question,
         "language": language,
         "display_agent_names": _display_agent_names(agents),
-        "branch_verdicts": _branch_verdicts(data, branches),
+        "branch_verdicts": _branch_verdicts(data, branches, report_verdict),
         "probability_bars": _probability_bars(branches),
         "transcript_excerpts": _transcript_excerpts(
             _as_list(data.get("messages")),
@@ -532,7 +552,32 @@ def build_public_artifact_for_scenario(
         ],
         "web_search_context": _decode_web_context(scenario.web_context_json),
     }
-    return build_public_artifact_from_mapping(mapping)
+    parsed_context = mapping["parsed_context"]
+    full_report = (
+        full_report_for_story(
+            parsed_context.get("full_report"),
+            max_bytes=settings.REPORT_FULL_REPORT_MAX_BYTES,
+        )
+        if settings.FEATURE_RESULT_REPORT
+        else None
+    )
+    if (
+        isinstance(full_report, dict)
+        and full_report.get("status") == "partial"
+        and full_report.get("truncated") is not True
+    ):
+        from app.services.result_report.builder import report_generation_is_active
+
+        # Like /story, a saved partial is still generating while its retry
+        # owns a live lease. A saved complete report retains its authority.
+        if report_generation_is_active(scenario.id):
+            full_report = {**full_report, "status": "generating"}
+    report_verdict = current_report_verdict(
+        full_report,
+        stale=report_result_is_stale(session, scenario, full_report),
+        eligible_branch_ids={branch.id for branch in terminal_leaves},
+    )
+    return build_public_artifact_from_mapping(mapping, report_verdict=report_verdict)
 
 
 def scan_public_artifact_for_secrets(value: Any, path: str = "$") -> None:

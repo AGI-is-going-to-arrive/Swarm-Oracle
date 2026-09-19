@@ -1226,12 +1226,31 @@ export function formatDomainBoolean(value: boolean, isZh: boolean): string {
   return value ? 'true' : 'false';
 }
 
+const DOMAIN_STATE_LABELS: Record<string, readonly [string, string]> = {
+  unresolved: ['未确定', 'Unresolved'],
+  pending: ['待处理', 'Pending'],
+  proposed: ['已提出', 'Proposed'],
+  adopted: ['已采纳', 'Adopted'],
+  rejected: ['未采纳', 'Rejected'],
+  executed: ['已执行', 'Executed'],
+  completed: ['已完成', 'Completed'],
+  failed: ['失败', 'Failed'],
+  cancelled: ['已取消', 'Cancelled'],
+  blocked: ['受阻', 'Blocked'],
+  open: ['开放', 'Open'],
+  closed: ['关闭', 'Closed'],
+};
+
 export function formatDomainValue(
   value: DomainValueV1 | null | undefined,
   isZh = false,
 ): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return formatDomainBoolean(value, isZh);
+  const label = Object.hasOwn(DOMAIN_STATE_LABELS, String(value))
+    ? DOMAIN_STATE_LABELS[String(value)]
+    : undefined;
+  if (label) return label[isZh ? 0 : 1];
   return String(value);
 }
 
@@ -1344,6 +1363,7 @@ export function formatDomainScalarValue(
   if (typeof value === 'boolean') return formatDomainBoolean(value, isZh);
   const raw = String(value).trim();
   const safeUnit = typeof unit === 'string' ? unit : '';
+  if (safeUnit === 'unitless') return formatDomainValue(raw, isZh);
   if (!Number.isInteger(scale) || scale < 0) return raw;
   const minor = /^currency:([A-Za-z]{3}):minor$/i.exec(safeUnit);
 

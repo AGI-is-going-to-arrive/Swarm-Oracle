@@ -27,8 +27,8 @@ describe('buildSingleFileGalleryHtml exporter', () => {
     source_summary: { domains: [] },
   };
 
-  function renderExportedArtifact(exportArtifact: PublicArtifact): Document {
-    const html = buildSingleFileGalleryHtml(exportArtifact, 'en');
+  function renderExportedArtifact(exportArtifact: PublicArtifact, language: 'en' | 'zh' = 'en'): Document {
+    const html = buildSingleFileGalleryHtml(exportArtifact, language);
     const documentNode = new DOMParser().parseFromString(html, 'text/html');
     const renderer = [...documentNode.querySelectorAll('script')]
       .find((script) => script.id !== 'swarm-artifact');
@@ -105,6 +105,18 @@ describe('buildSingleFileGalleryHtml exporter', () => {
     // Match any link tag that references stylesheet href
     const stylesheetHrefRegex = /<link\s+[^>]*rel=["']stylesheet["']\s+[^>]*href=["'][^"']+["']/i;
     expect(stylesheetHrefRegex.test(html)).toBe(false);
+  });
+
+  it.each([
+    ['en', 'Share in this run', 'These are branch weights within this simulation, not real-world probabilities.'],
+    ['zh', '本次推演占比', '这是本次推演里的分支占比，不是现实事件发生的概率。'],
+  ] as const)('labels branch weights truthfully in %s, including the accessible name', (language, label, disclaimer) => {
+    const documentNode = renderExportedArtifact(artifact, language);
+
+    expect(documentNode.querySelector('.bar-text')?.textContent).toBe(`80% ${label}`);
+    expect(documentNode.querySelector('[role="progressbar"]')?.getAttribute('aria-label')).toBe(`${label}: Victory`);
+    expect(documentNode.body.textContent).toContain(disclaimer);
+    expect(documentNode.querySelector('.bar-text')?.textContent).not.toContain('Probability');
   });
 
   it('keeps the verdict visible but omits confidence copy when confidence is null', () => {

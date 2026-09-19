@@ -16,6 +16,7 @@ import { buildAutomationErrorState } from '../lib/apiErrorMessage';
 import { captureCompositeElementDataUrl, captureElementDataUrl } from '../hooks/useScreenCapture';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { diffChars } from '../lib/textDiff';
+import { getAgentEmotionLabel } from '../lib/agentValueLabels';
 import DomainCompareRows from '../components/domainWorld/DomainCompareRows';
 import type { DivergenceComponents, DomainStateDiff } from '../types';
 import './CompareDigestView.css';
@@ -108,7 +109,7 @@ type CompareErrorState =
   | { kind: 'load_failed'; source: 'compare' | 'scenario' | 'capability'; status: number | null };
 
 export function CompareDigestView() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const location = useLocation();
   const sampleGuide = readSampleGuideRouteState(location.state);
   const {
@@ -973,7 +974,7 @@ export function CompareDigestView() {
                                   style={needsCollapse ? { cursor: 'pointer' } : undefined}
                                 >
                                   <strong className="compare-message__agent">{msg.agent_name}</strong>
-                                  <span className="compare-message__emotion">{msg.emotion}</span>
+                                  <span className="compare-message__emotion">{getAgentEmotionLabel(msg.emotion, i18n.language)}</span>
                                   {needsCollapse && (
                                     <span className="compare-message__toggle">{isExpanded ? '▾' : '▸'}</span>
                                   )}
@@ -1020,7 +1021,7 @@ export function CompareDigestView() {
                                     style={needsCollapse ? { cursor: 'pointer' } : undefined}
                                   >
                                     <strong className="compare-message__agent">{msg.agent_name}</strong>
-                                    <span className="compare-message__emotion">{msg.emotion}</span>
+                                    <span className="compare-message__emotion">{getAgentEmotionLabel(msg.emotion, i18n.language)}</span>
                                     {needsCollapse && (
                                       <span className="compare-message__toggle">{isExpanded ? '▾' : '▸'}</span>
                                     )}
@@ -1056,7 +1057,7 @@ export function CompareDigestView() {
                                     style={needsCollapse ? { cursor: 'pointer' } : undefined}
                                   >
                                     <strong className="compare-message__agent">{msg.agent_name}</strong>
-                                    <span className="compare-message__emotion">{msg.emotion}</span>
+                                    <span className="compare-message__emotion">{getAgentEmotionLabel(msg.emotion, i18n.language)}</span>
                                     {needsCollapse && (
                                       <span className="compare-message__toggle">{isExpanded ? '▾' : '▸'}</span>
                                     )}

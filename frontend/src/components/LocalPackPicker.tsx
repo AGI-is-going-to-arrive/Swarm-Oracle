@@ -50,6 +50,12 @@ const GENRE_FALLBACK_COLOR = '#8a7e74';
 // 未知/扩展 genre 的合并 sentinel，确保筛选区最多只出现一个「其他」分段（不暴露内部枚举）
 const OTHER_GENRE = '__other__';
 
+const PACK_LANGUAGE_LABELS: Record<LocalPack['suggested_settings']['language'], readonly [string, string]> = {
+  zh: ['中文', 'Chinese'],
+  en: ['英文', 'English'],
+  bilingual: ['中英双语', 'Chinese and English'],
+};
+
 const normalizeGenre = (genre: string | undefined | null): string =>
   (genre || '').toLowerCase().trim();
 
@@ -631,12 +637,12 @@ export function LocalPackPicker({ onImport, onDemoImported }: LocalPackPickerPro
                         {selectedPackDetail.suggested_settings.rounds}
                       </div>
                       <div>
-                        <strong>{t('home.mode_label', 'Simulation Mode')}:</strong>{' '}
-                        {selectedPackDetail.suggested_settings.simulation_mode}
+                        <strong>{t('home.runtime_preset_label', 'Simulation Mode')}:</strong>{' '}
+                        {t(`home.runtime_preset_${selectedPackDetail.suggested_settings.simulation_mode}`)}
                       </div>
                       <div>
                         <strong>{t('common.language', 'Language')}:</strong>{' '}
-                        {selectedPackDetail.suggested_settings.language}
+                        {PACK_LANGUAGE_LABELS[selectedPackDetail.suggested_settings.language][i18n.language.startsWith('zh') ? 0 : 1]}
                       </div>
                     </div>
                   </div>

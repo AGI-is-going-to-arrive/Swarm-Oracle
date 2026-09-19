@@ -1,19 +1,23 @@
-[中文优先 / Chinese first](CONFIGURATION.md) | English first / 英文优先
+[English first / 英文优先](CONFIGURATION.en.md) | [中文优先 / Chinese first](CONFIGURATION.md)
 
 # Configuration / 配置说明
 
 ![Choose and test a model connection](illustrations/model-setup.en.webp)
 
-*Browse a sample first, then connect a model for actions that generate new content.*
+*AI-generated conceptual illustration: browse a sample first, then connect a model for actions that generate new content.*
 
 <details>
 <summary>中文配图 / Chinese illustration</summary>
 
 ![选择模型连接并测试](illustrations/model-setup.zh.webp)
 
-*先浏览样例，再为需要生成的操作连接模型。*
+*AI 生成概念插画：先浏览样例，再为需要生成的操作连接模型。*
 
 </details>
+
+The screenshots show the app on 2026-09-19 using fictional battery-allocation material set in the island city of Harborlight. Conceptual illustrations have separate labels. See the full [screenshot tour](SCREENSHOTS.en.md).
+
+以下实拍展示 2026-09-19 的真实应用界面，以虚构的灯港群岛电池分配问题为例。概念插画另有标注。完整界面见[截图导览](SCREENSHOTS.md)。
 
 ## Choose how you will use the app / 先选你的使用方式
 
@@ -69,6 +73,21 @@ Exact-local hosts are `localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal
 Reasoning effort is saved with a run and carried into its child calls. The bound run policy takes priority over a child call's default, so a run set to `low` does not silently switch effort in a child call. Later operations may override it where their API permits; otherwise they inherit the saved value, then the server default. `none` omits the native effort parameter; it does not guarantee that the provider disables reasoning.
 
 reasoning effort 会随运行保存，并传给同一运行中的后续子调用；已绑定的运行策略优先于子调用的默认值。例如选择 `low` 后，子调用不会自行改回其它 effort。后续操作可按入口合同显式覆盖，否则继承已保存值，再回退服务器默认。`none` 表示不发送原生 effort 参数，不保证 provider 自身关闭推理。
+
+### Model connection / 模型连接
+
+This view is before saving. Enter your own connection details, test them, then save.
+
+此图为保存前的连接表单：填写自己的连接信息，测试后再保存。
+
+![Model connection](screenshots/current/model-setup.en.webp)
+
+<details>
+<summary>中文实拍 / Chinese screenshot</summary>
+
+![模型连接](screenshots/current/model-setup.zh.webp)
+
+</details>
 
 ## Distinguish configuration, connection tests, and real results / 区分已配置、连接测试和真实结果
 

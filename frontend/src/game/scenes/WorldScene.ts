@@ -26,6 +26,7 @@ import {
   CHARACTER_SPRITE_KEYS,
   getSceneTextureKey,
   getThemeAssetPath,
+  getTheaterThemeLabel,
   isSceneThemeId,
 } from '../../lib/themeRegistry';
 import { getCharacterTextureRequest } from '../sceneAssetPlan';
@@ -444,7 +445,10 @@ export class WorldScene extends Phaser.Scene {
     grid.setDepth(1);
 
     // Scene label with rounded pill style
-    const display = this.sceneTheme.replace(/_/g, ' ');
+    const display = getTheaterThemeLabel(
+      this.sceneTheme,
+      (i18next.resolvedLanguage || i18next.language || 'en').toLowerCase().startsWith('zh'),
+    ) ?? this.sceneTheme;
     const labelX = this.useDomBubbles ? w - this.px(14) : w / 2;
     const labelY = this.useDomBubbles ? this.px(112) : this.px(12);
     this.themeLabel = this.add.text(labelX, labelY, `${palette.icon} ${display}`, {
@@ -821,7 +825,10 @@ export class WorldScene extends Phaser.Scene {
 
     // Update label
     if (this.themeLabel) {
-      const display = newTheme.replace(/_/g, ' ');
+      const display = getTheaterThemeLabel(
+        newTheme,
+        (i18next.resolvedLanguage || i18next.language || 'en').toLowerCase().startsWith('zh'),
+      ) ?? newTheme;
       this.themeLabel.setText(`${palette.icon} ${display}`);
     }
 

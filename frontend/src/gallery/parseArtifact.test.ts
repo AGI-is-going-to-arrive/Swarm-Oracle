@@ -65,6 +65,37 @@ describe('parsePublicArtifact runtime validator', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('marks a long question as an excerpt without splitting its last English word', () => {
+    const question = `${'route '.repeat(52)}and supporting residents throughout the flood`;
+    const result = parsePublicArtifact({ ...validArtifact, question });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.artifact.question).toBe(`${'route '.repeat(52)}and…`);
+      expect(Array.from(result.artifact.question).length).toBeLessThanOrEqual(320);
+      expect(parsePublicArtifact(result.artifact)).toEqual(result);
+    }
+  });
+
+  it.each(['Q'.repeat(320), '船🚢'.repeat(160)])('preserves a question exactly at the Unicode character budget', (question) => {
+    const result = parsePublicArtifact({ ...validArtifact, question });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.artifact.question).toBe(question);
+  });
+
+  it('keeps Unicode code points intact when marking a truncated question', () => {
+    const question = '船🚢'.repeat(170);
+    const result = parsePublicArtifact({ ...validArtifact, question });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.artifact.question).toBe(`${Array.from(question).slice(0, 319).join('')}…`);
+      expect(Array.from(result.artifact.question)).toHaveLength(320);
+      expect(result.artifact.question).not.toContain('\uFFFD');
+    }
+  });
+
   it('returns ok: false for malformed JSON strings', () => {
     const result = parsePublicArtifact('{ invalid json: ');
     expect(result.ok).toBe(false);

@@ -95,15 +95,25 @@
         <li><h3>选一个问题继续看<span lang="en">Pick one question to follow</span></h3><p>想知道依据，就查发言和行动；想试别的走法，就改写。生成新内容时需要可用的模型配置。</p><p lang="en">Check messages and actions for the basis of a claim, or rewrite a choice to try another path. Generating new content needs a working model connection.</p></li>
       </ol>
     </div>
-    <details class="screenshots">
-      <summary>看真实界面截图 <span lang="en">View real app screenshots</span></summary>
-      <p class="muted bilingual">以下是已保存的界面截图，文字和布局可能与当前版本不同。点击可查看完整长图。<span lang="en">These are saved app captures; wording and layout may differ from the current version. Open a capture to see the full image.</span></p>
-      <div class="screenshot-grid">
-        <figure><a class="shot-link" href="assets/screenshots/01-home.png" data-lightbox data-caption="首页：打开样例或写下问题 / Home: open a sample or ask a question"><img src="assets/screenshots/01-home.png" loading="lazy" decoding="async" width="1436" height="3125" alt="真实首页截图，点击查看完整长图 / Real Home screenshot; open the full capture"></a><figcaption>首页<span lang="en">Home</span></figcaption></figure>
-        <figure><a class="shot-link" href="assets/screenshots/02-result.png" data-lightbox data-caption="结果页：摘要和不同结局 / Results: summary and different endings"><img src="assets/screenshots/02-result.png" loading="lazy" decoding="async" width="1436" height="10988" alt="真实结果页截图，点击查看完整长图 / Real Results screenshot; open the full capture"></a><figcaption>结果页<span lang="en">Results</span></figcaption></figure>
-        <figure><a class="shot-link" href="assets/screenshots/13-compare.png" data-lightbox data-caption="对比页：原来的选择与改写后的走向 / Compare: the original choice and the rewritten path"><img src="assets/screenshots/13-compare.png" loading="lazy" decoding="async" width="1436" height="2387" alt="真实对比页截图，点击查看完整长图 / Real Compare screenshot; open the full capture"></a><figcaption>改写对比<span lang="en">Compare a rewrite</span></figcaption></figure>
-      </div>
-    </details>
+    <section class="screenshots" aria-labelledby="screenshots-title">
+      <h3 id="screenshots-title">先看实际界面<span lang="en">See the app itself</span></h3>
+      <p class="muted bilingual">下面是本次用虚构场景重新运行应用后拍摄的截图。切换语言，查看对应界面；点击图片可以放大。<span lang="en">These screenshots were recaptured from the current app using fictional scenarios. Choose a language to see that interface, or open an image for a closer look.</span></p>
+    <div class="capture-grid">
+      <figure class="app-capture" data-capture>
+        <div class="illustration__switch" role="group" aria-label="首页截图语言 / Home screenshot language"><button type="button" data-capture-lang="zh" aria-pressed="true">中文界面</button><button type="button" data-capture-lang="en" aria-pressed="false">English interface</button></div>
+        <a class="shot-link" href="assets/screenshots/current/home.zh.webp" data-capture-image="zh" data-lightbox data-caption="首页：打开样例，或开始自己的问题"><img src="assets/screenshots/current/home.zh.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="当前应用首页，可以打开官方样例或输入自己的问题，点击放大"></a>
+        <a class="shot-link" href="assets/screenshots/current/home.en.webp" data-capture-image="en" data-lightbox data-caption="Home: open a sample or start with your own question" lang="en" hidden><img src="assets/screenshots/current/home.en.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="The current Home screen, with official samples and a place to ask your own question; open a larger view"></a>
+        <figcaption><span data-capture-caption="zh"><strong>首页</strong>先打开一个样例，熟悉结果长什么样。</span><span data-capture-caption="en" lang="en" hidden><strong>Home</strong>Open a sample first to see what a result looks like.</span></figcaption>
+      </figure>
+      <figure class="app-capture" data-capture>
+        <div class="illustration__switch" role="group" aria-label="结果页截图语言 / Results screenshot language"><button type="button" data-capture-lang="zh" aria-pressed="true">中文界面</button><button type="button" data-capture-lang="en" aria-pressed="false">English interface</button></div>
+        <a class="shot-link" href="assets/screenshots/current/result.zh.webp" data-capture-image="zh" data-lightbox data-caption="结果页：先读摘要，再查看不同结局"><img src="assets/screenshots/current/result.zh.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="当前结果页显示推演摘要和结局入口，点击放大"></a>
+        <a class="shot-link" href="assets/screenshots/current/result.en.webp" data-capture-image="en" data-lightbox data-caption="Results: read the summary, then explore the endings" lang="en" hidden><img src="assets/screenshots/current/result.en.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="The current Results screen with a simulation summary and endings; open a larger view"></a>
+        <figcaption><span data-capture-caption="zh"><strong>结果页</strong>先读摘要，再选择想深入了解的结局。</span><span data-capture-caption="en" lang="en" hidden><strong>Results</strong>Read the summary, then choose an ending to explore.</span></figcaption>
+      </figure>
+    </div>
+      <div class="inline-links"><a href="https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/blob/main/docs/SCREENSHOTS.md">查看完整截图导览</a><a href="https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/blob/main/docs/SCREENSHOTS.en.md" lang="en">Browse all app screenshots in English</a></div>
+    </section>
   </div>
 </section>
 
@@ -123,6 +133,20 @@
       <figcaption><span data-art-caption="zh">概念插画：带着一个问题往回看。</span><span data-art-caption="en" lang="en" hidden>Concept illustration: follow a question back through the story.</span></figcaption>
     </figure>
     </div>
+    <div class="screenshots capture-grid">
+      <figure class="app-capture" data-capture>
+        <div class="illustration__switch" role="group" aria-label="查图谱截图语言 / Explore a graph screenshot language"><button type="button" data-capture-lang="zh" aria-pressed="true">中文界面</button><button type="button" data-capture-lang="en" aria-pressed="false">English interface</button></div>
+        <a class="shot-link" href="assets/screenshots/current/causal-map.zh.webp" data-capture-image="zh" data-lightbox data-caption="因果图：沿着节点查看事件之间的联系"><img src="assets/screenshots/current/causal-map.zh.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="当前因果图以节点和连线展示推演中的事件联系，点击放大"></a>
+        <a class="shot-link" href="assets/screenshots/current/causal-map.en.webp" data-capture-image="en" data-lightbox data-caption="Causal map: follow the links between events" lang="en" hidden><img src="assets/screenshots/current/causal-map.en.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="The current causal map shows links between events in the simulation; open a larger view"></a>
+        <figcaption><span data-capture-caption="zh"><strong>查图谱</strong>沿着关系查看事件，再点节点读详情。</span><span data-capture-caption="en" lang="en" hidden><strong>Explore a graph</strong>Follow the connections, then select a node for its details.</span></figcaption>
+      </figure>
+      <figure class="app-capture" data-capture>
+        <div class="illustration__switch" role="group" aria-label="继续追问截图语言 / Ask a follow-up screenshot language"><button type="button" data-capture-lang="zh" aria-pressed="true">中文界面</button><button type="button" data-capture-lang="en" aria-pressed="false">English interface</button></div>
+        <a class="shot-link" href="assets/screenshots/current/node-chat.zh.webp" data-capture-image="zh" data-lightbox data-caption="节点追问：带着选中节点的上下文继续提问"><img src="assets/screenshots/current/node-chat.zh.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="当前节点追问界面，围绕选中的节点查看对话，点击放大"></a>
+        <a class="shot-link" href="assets/screenshots/current/node-chat.en.webp" data-capture-image="en" data-lightbox data-caption="Node conversation: ask a follow-up in the selected node’s context" lang="en" hidden><img src="assets/screenshots/current/node-chat.en.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="The current node conversation screen, showing a follow-up about the selected node; open a larger view"></a>
+        <figcaption><span data-capture-caption="zh"><strong>继续追问</strong>看完节点详情，问清这一步为什么发生。</span><span data-capture-caption="en" lang="en" hidden><strong>Ask a follow-up</strong>Read the node details, then ask why this step happened.</span></figcaption>
+      </figure>
+    </div>
     <div class="explore-row explore-row--reverse">
       <div class="explore__text">
         <h3>改一句话，比较两条走向<span lang="en">Rewrite a line. Compare the paths.</span></h3>
@@ -135,6 +159,20 @@
       <img src="assets/guide/rewrite-compare.en.webp" loading="lazy" decoding="async" width="1536" height="1024" alt="Comparing an original path with a new path after changing one choice" lang="en" data-art-image="en" hidden>
       <figcaption><span data-art-caption="zh">概念插画：保留原来的故事，再试另一种选择。</span><span data-art-caption="en" lang="en" hidden>Concept illustration: keep the original story and try another choice.</span></figcaption>
     </figure>
+    </div>
+    <div class="screenshots capture-grid">
+      <figure class="app-capture" data-capture>
+        <div class="illustration__switch" role="group" aria-label="改一个选择截图语言 / Change a choice screenshot language"><button type="button" data-capture-lang="zh" aria-pressed="true">中文界面</button><button type="button" data-capture-lang="en" aria-pressed="false">English interface</button></div>
+        <a class="shot-link" href="assets/screenshots/current/rewrite.zh.webp" data-capture-image="zh" data-lightbox data-caption="改写：选中一条发言，试另一种说法"><img src="assets/screenshots/current/rewrite.zh.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="当前改写界面，可以修改选中的发言并生成后续，点击放大"></a>
+        <a class="shot-link" href="assets/screenshots/current/rewrite.en.webp" data-capture-image="en" data-lightbox data-caption="Rewrite: choose a message and try different words" lang="en" hidden><img src="assets/screenshots/current/rewrite.en.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="The current rewrite screen, where a selected message can be changed to generate a new continuation; open a larger view"></a>
+        <figcaption><span data-capture-caption="zh"><strong>改一个选择</strong>保留原来的分支，生成另一种后续。</span><span data-capture-caption="en" lang="en" hidden><strong>Change a choice</strong>Keep the original branch and generate another continuation.</span></figcaption>
+      </figure>
+      <figure class="app-capture" data-capture>
+        <div class="illustration__switch" role="group" aria-label="看哪里变了截图语言 / See what changed screenshot language"><button type="button" data-capture-lang="zh" aria-pressed="true">中文界面</button><button type="button" data-capture-lang="en" aria-pressed="false">English interface</button></div>
+        <a class="shot-link" href="assets/screenshots/current/compare.zh.webp" data-capture-image="zh" data-lightbox data-caption="对比：并排查看原分支与改写分支"><img src="assets/screenshots/current/compare.zh.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="当前对比界面，并排呈现两条分支的差异，点击放大"></a>
+        <a class="shot-link" href="assets/screenshots/current/compare.en.webp" data-capture-image="en" data-lightbox data-caption="Compare: view the original and rewritten branches side by side" lang="en" hidden><img src="assets/screenshots/current/compare.en.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="The current comparison screen with differences between two branches side by side; open a larger view"></a>
+        <figcaption><span data-capture-caption="zh"><strong>看哪里变了</strong>比较选择、行动和结局，找到分歧从哪里开始。</span><span data-capture-caption="en" lang="en" hidden><strong>See what changed</strong>Compare choices, actions, and endings to find where the paths diverge.</span></figcaption>
+      </figure>
     </div>
   </div>
 </section>
@@ -163,14 +201,27 @@
 
 <section class="section" id="modes" aria-labelledby="modes-title">
   <div class="shell">
-    <div class="split">
+    <div class="debate-intro">
       <div class="explore__text">
         <h2 id="modes-title">只想把争议说清楚？试试辩论<span class="heading-en" lang="en">For a focused disagreement, try a debate</span></h2>
         <div class="bilingual"><p>正方、反方与一位评委按固定流程讨论同一命题。看完裁决，再查看发言和论点图，判断哪些理由站得住。</p><p lang="en">Two sides and one judge discuss a proposition in a fixed format. After the verdict, review the speeches and argument map to assess the reasons.</p></div>
         <ol class="debate-stages" aria-label="辩论阶段 / Debate phases"><li>开场 <span lang="en">Opening</span></li><li>交锋 <span lang="en">Crossfire</span></li><li>反驳 <span lang="en">Rebuttal</span></li><li>结辩 <span lang="en">Closing</span></li><li>裁决 <span lang="en">Verdict</span></li></ol>
         <p class="small bilingual">首页的推演轮数和角色数量不会改变这套辩论结构。评委的裁决是本次讨论的评价，仍需你核对事实和理由。<span lang="en">Simulation round and character settings do not change this debate format. The judge evaluates the discussion; you still need to check its facts and reasoning.</span></p>
       </div>
-      <figure class="app-capture"><a class="shot-link" href="assets/screenshots/20-debate-arena.png" data-lightbox data-caption="辩论竞技场的已保存真实截图 / Saved real capture of the Debate Arena"><img src="assets/screenshots/20-debate-arena.png" loading="lazy" decoding="async" width="1440" height="960" alt="辩论竞技场的真实界面截图，点击放大 / Real Debate Arena screenshot; open a larger view"></a><figcaption>真实界面截图，布局可能与当前版本不同。<span lang="en">Real app capture; the current layout may differ.</span></figcaption></figure>
+    </div>
+    <div class="screenshots capture-grid">
+      <figure class="app-capture" data-capture>
+        <div class="illustration__switch" role="group" aria-label="听双方怎么说截图语言 / Hear both sides screenshot language"><button type="button" data-capture-lang="zh" aria-pressed="true">中文界面</button><button type="button" data-capture-lang="en" aria-pressed="false">English interface</button></div>
+        <a class="shot-link" href="assets/screenshots/current/debate.zh.webp" data-capture-image="zh" data-lightbox data-caption="辩论：按阶段阅读双方发言"><img src="assets/screenshots/current/debate.zh.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="当前辩论界面，按阶段展示正反双方的发言，点击放大"></a>
+        <a class="shot-link" href="assets/screenshots/current/debate.en.webp" data-capture-image="en" data-lightbox data-caption="Debate: follow both sides through each phase" lang="en" hidden><img src="assets/screenshots/current/debate.en.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="The current Debate screen shows both sides’ speeches by phase; open a larger view"></a>
+        <figcaption><span data-capture-caption="zh"><strong>听双方怎么说</strong>沿着阶段阅读发言，看看各自回应了什么。</span><span data-capture-caption="en" lang="en" hidden><strong>Hear both sides</strong>Read the speeches by phase and see how each side responds.</span></figcaption>
+      </figure>
+      <figure class="app-capture" data-capture>
+        <div class="illustration__switch" role="group" aria-label="回头核对理由截图语言 / Check the reasoning screenshot language"><button type="button" data-capture-lang="zh" aria-pressed="true">中文界面</button><button type="button" data-capture-lang="en" aria-pressed="false">English interface</button></div>
+        <a class="shot-link" href="assets/screenshots/current/debate-result.zh.webp" data-capture-image="zh" data-lightbox data-caption="辩论结果：读裁决，再核对理由"><img src="assets/screenshots/current/debate-result.zh.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="当前辩论结果界面，展示评委裁决和理由，点击放大"></a>
+        <a class="shot-link" href="assets/screenshots/current/debate-result.en.webp" data-capture-image="en" data-lightbox data-caption="Debate result: read the verdict and check its reasoning" lang="en" hidden><img src="assets/screenshots/current/debate-result.en.webp" loading="lazy" decoding="async" width="1440" height="1000" alt="The current Debate result screen shows the judge’s verdict and reasoning; open a larger view"></a>
+        <figcaption><span data-capture-caption="zh"><strong>回头核对理由</strong>把裁决和原发言对着看，再作自己的判断。</span><span data-capture-caption="en" lang="en" hidden><strong>Check the reasoning</strong>Compare the verdict with the speeches and draw your own conclusion.</span></figcaption>
+      </figure>
     </div>
   </div>
 </section>
@@ -248,7 +299,7 @@ docker compose up --build -d</code></pre>
 
 <footer class="footer"><div class="shell footer__grid"><div><a class="footer__brand" href="#top">SwarmOracle <span>群体预言机</span></a><p>开源、自托管，接入你选择的模型。<span lang="en">Open source, self-hosted, with your choice of model.</span></p></div><div class="footer__links"><a href="https://github.com/AGI-is-going-to-arrive/Swarm-Oracle">GitHub</a><a href="https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/blob/main/LICENSE">AGPL-3.0</a><a href="#top">回到顶部 <span lang="en">Back to top</span></a></div></div></footer>
 
-<dialog class="lightbox" id="lightbox" aria-labelledby="lightbox-caption"><div class="lightbox__head"><p id="lightbox-caption"></p><button type="button" id="lightbox-close">关闭 / Close</button></div><div class="lightbox__body"><img id="lightbox-image" src="assets/screenshots/20-debate-arena.png" width="1440" height="960" loading="lazy" decoding="async" alt=""></div></dialog>
+<dialog class="lightbox" id="lightbox" aria-labelledby="lightbox-caption"><div class="lightbox__head"><p id="lightbox-caption"></p><div class="lightbox__actions"><a id="lightbox-original" target="_blank" rel="noopener">查看原图 / Full size</a><button type="button" id="lightbox-close" autofocus>关闭 / Close</button></div></div><div class="lightbox__body"><img id="lightbox-image" width="1440" height="1000" decoding="async" alt=""></div></dialog>
 <script src="app.js"></script>
 </body>
 </html>

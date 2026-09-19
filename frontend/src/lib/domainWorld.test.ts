@@ -225,6 +225,16 @@ describe('domainWorld helpers', () => {
     expect(formatDomainValue('7200')).toBe('7200');
   });
 
+  it('localizes known state values without rewriting custom states or numeric values', () => {
+    expect(formatDomainValue('unresolved', true)).toBe('未确定');
+    expect(formatDomainUnitValue('unresolved', 'unitless', 0, false)).toBe('Unresolved');
+    expect(formatDomainScalarValue('adopted', 'unitless', 0, true)).toBe('已采纳');
+    expect(formatDomainScalarValue('hospital_first', 'unitless', 0, true)).toBe('hospital_first');
+    expect(formatDomainScalarValue('0.25', 'unitless', 2, true)).toBe('0.25');
+    expect(formatDomainValue('等待各方讨论', false)).toBe('等待各方讨论');
+    expect(formatDomainValue('constructor', true)).toBe('constructor');
+  });
+
   it('uses ISO currency minor exponents without losing 18-digit precision', () => {
     expect(formatDomainUnitValue('800000', 'currency:CNY:minor', 0, true)).toBe('8000 元');
     expect(formatDomainUnitValue('500000', 'currency:CNY:minor', 0, false)).toBe('5000 CNY');

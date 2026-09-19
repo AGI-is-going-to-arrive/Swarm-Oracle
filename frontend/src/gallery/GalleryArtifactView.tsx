@@ -36,6 +36,9 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
           {/* Branches Section */}
           <section className="artifact-section" aria-label={t('gallery.branch_predictions_aria')}>
             <h3>{t('common.branches', 'Timelines')}</h3>
+            {sortedProbBars.length > 0 && (
+              <p>{t('gallery.probability_disclaimer')}</p>
+            )}
             {sortedProbBars.length === 0 ? (
               <p>{t('common.empty', 'No branches available')}</p>
             ) : (
@@ -67,7 +70,7 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
                         )}
                       </div>
 
-                      {/* Probability Bar */}
+                      {/* Share within this simulation, not real-world odds. */}
                       <div className="probability-bar-wrapper">
                         <div className="probability-bar-outer">
                           <div
@@ -76,12 +79,12 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
                             aria-valuenow={percentage}
                             aria-valuemin={0}
                             aria-valuemax={100}
-                            aria-label={`${t('gallery.probability_label', 'Probability')} for ${bar.label}`}
+                            aria-label={t('gallery.probability_aria', { branch: bar.label })}
                             style={{ width: `${percentage}%` }}
                           />
                         </div>
                         <div className="probability-text">
-                          {percentage}% {t('gallery.probability_label', 'Probability')}
+                          {percentage}% {t('gallery.probability_label', 'Share in this run')}
                         </div>
                       </div>
 

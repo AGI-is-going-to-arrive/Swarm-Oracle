@@ -5,13 +5,15 @@ import { PUBLIC_ARTIFACT_SCHEMA_VERSION, type PublicArtifact } from '../types';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => {
+    t: (key: string, options?: string | Record<string, unknown>) => {
       const map: Record<string, string> = {
         'gallery.title': 'Public Artifact Gallery',
         'gallery.confidence_high': 'High Confidence',
         'gallery.confidence_medium': 'Medium Confidence',
         'gallery.confidence_low': 'Low Confidence',
-        'gallery.probability_label': 'Probability',
+        'gallery.probability_label': 'Share in this run',
+        'gallery.probability_aria': 'Share in this run: {{branch}}',
+        'gallery.probability_disclaimer': 'These are branch weights within this simulation, not real-world probabilities.',
         'gallery.sources_title': 'Verified Sources',
         'gallery.agents_title': 'Agent Swarm',
         'gallery.transcript_title': 'Excerpts',
@@ -19,7 +21,10 @@ vi.mock('react-i18next', () => ({
         'common.empty': 'None',
         'home.question_input_label': 'Simulation Question',
       };
-      return map[key] ?? key;
+      const label = map[key] ?? key;
+      return typeof options === 'object'
+        ? label.replace('{{branch}}', String(options.branch ?? ''))
+        : label;
     },
     i18n: { language: 'en', changeLanguage: vi.fn() },
   }),
@@ -123,6 +128,10 @@ describe('GalleryArtifactView rendering', () => {
     expect(progressbar).toHaveAttribute('aria-valuenow', '75');
     expect(progressbar).toHaveAttribute('aria-valuemin', '0');
     expect(progressbar).toHaveAttribute('aria-valuemax', '100');
+    expect(progressbar).toHaveAttribute('aria-label', 'Share in this run: Northern Triumph');
+    expect(screen.getByText('75% Share in this run')).toBeInTheDocument();
+    expect(screen.getByText('These are branch weights within this simulation, not real-world probabilities.')).toBeInTheDocument();
+    expect(screen.queryByText('75% Probability')).not.toBeInTheDocument();
   });
 
   it('keeps the verdict visible but omits the confidence badge when confidence is null', () => {

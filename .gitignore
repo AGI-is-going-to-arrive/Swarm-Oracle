@@ -33,6 +33,23 @@ frontend/dist-spikes/
 frontend/coverage/
 frontend/.tmp-playwright/
 
+# Generated test reports and tool caches; test source and CI stay tracked.
+**/coverage/
+**/htmlcov/
+**/.coverage
+**/.coverage.*
+**/coverage.xml
+**/test-results/
+**/playwright-report/
+**/blob-report/
+**/.mypy_cache/
+**/.hypothesis/
+**/.tox/
+**/.nox/
+**/*.tsbuildinfo
+/*.log
+/backend/*.log
+
 # Generated runtime artifacts
 .tmp/
 .tmp-playwright/
@@ -96,6 +113,14 @@ frontend/.playwright-cli/
 /.release-audit/
 /.ccg/
 /.llmdoc-tmp/
+/llmdoc/
+/docs/superpowers/
+/.local-docs/
+
+# Retired captures stay local; reviewed current screenshots remain public.
+/docs/screenshots/*.png
+/docs/screenshots-en/
+/site/assets/screenshots/*.png
 
 # Dev/internal helper scripts — kept locally, never published.
 # Only these known local helpers are ignored; new repo-level scripts stay visible.

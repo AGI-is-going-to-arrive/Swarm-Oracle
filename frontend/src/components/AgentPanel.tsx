@@ -6,6 +6,7 @@ import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
 import useReducedMotion from '../hooks/useReducedMotion';
+import { getAgentEmotionLabel, getAgentStanceLabel, getAgentTierLabel } from '../lib/agentValueLabels';
 import type { AgentMessage, BranchInfo } from '../types';
 import './AgentPanel.css';
 
@@ -87,14 +88,15 @@ function visibleMetadataFailureCode(code: unknown): string {
 }
 
 function EmotionDot({ emotion }: { emotion: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const color = EMOTION_COLORS[emotion] || EMOTION_COLORS.neutral;
+  const label = getAgentEmotionLabel(emotion, i18n.language);
   return (
     <span
       className="emotion-dot"
       ref={(el) => { if (el) el.style.setProperty('--emotion-color', color); }}
-      title={emotion}
-      aria-label={t('sim.panel.emotion_label', { emotion })}
+      title={label}
+      aria-label={t('sim.panel.emotion_label', { emotion: label })}
     />
   );
 }
@@ -229,7 +231,7 @@ interface AgentPanelProps {
 }
 
 export function AgentPanel({ onBranchDetail, onViewProfile, live = true }: AgentPanelProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const agents = useSimulationStore((s) => s.agents);
   const messages = useSimulationStore((s) => s.messages);
   const branches = useSimulationStore((s) => s.branches);
@@ -305,15 +307,6 @@ export function AgentPanel({ onBranchDetail, onViewProfile, live = true }: Agent
   const lastReadIndex = followingMessages ? -1 : filteredMessages.findIndex((message) => messageMarker(message) === lastReadMessage);
   const newMessageCount = !live || followingMessages ? 0 : filteredMessages.length - lastReadIndex - 1;
 
-  const tierLabel = (tier: string) => {
-    switch (tier) {
-      case 'CORE': return t('sim.panel.tier_core');
-      case 'IMPORTANT': return t('sim.panel.tier_important');
-      case 'CROWD': return t('sim.panel.tier_crowd');
-      default: return tier;
-    }
-  };
-
   // Get the filtered agent name for display
   const filterAgentName = useMemo(() => {
     if (!filterAgentId) return null;
@@ -386,10 +379,10 @@ export function AgentPanel({ onBranchDetail, onViewProfile, live = true }: Agent
                 <PixelAvatar name={agent.name} size={36} />
                 <span className="agent-info">
                   <span className="agent-name">{agent.name}</span>
-                  <span className="agent-role">{agent.role}{agent.stance ? ` · ${agent.stance}` : ''}</span>
+                  <span className="agent-role">{agent.role}{agent.stance ? ` · ${getAgentStanceLabel(agent.stance, i18n.language)}` : ''}</span>
                   <span className="agent-meta">
                     <span className={`tier-badge tier-${agent.tier.toLowerCase()}`}>
-                      {tierLabel(agent.tier)}
+                      {getAgentTierLabel(t, agent.tier)}
                     </span>
                     <EmotionDot emotion={agent.emotion} />
                   </span>

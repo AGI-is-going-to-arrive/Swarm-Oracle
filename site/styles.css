@@ -106,14 +106,17 @@ summary::marker { color: var(--amethyst-400); }
 summary [lang="en"] { margin-left: 0.5rem; color: var(--bone-300); font-size: 0.875rem; }
 details[open] { padding-bottom: 1.6rem; }
 .screenshots { margin-top: 3rem; }
+.screenshots > h3 { margin-bottom: 1rem; }
 .screenshots > p { max-width: 75ch; margin-bottom: 1.5rem; }
-.screenshot-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.4rem; }
+.capture-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; }
 .shot-link { display: block; border: 1px solid var(--metal-line); border-radius: 4px; overflow: hidden; background: var(--obsidian-900); }
 .shot-link:hover { border-color: var(--amethyst-400); }
-.screenshot-grid img { width: 100%; height: 235px; object-fit: cover; object-position: top; }
+.app-capture { min-width: 0; }
 .app-capture img { width: 100%; height: auto; }
+.app-capture figcaption { font-size: 0.875rem; }
+.app-capture figcaption strong { display: block; margin-bottom: 0.3rem; color: var(--ivory-50); font-weight: 500; font-size: 1rem; }
 .explore-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: clamp(2rem, 6vw, 5rem); }
-.explore-row + .explore-row { margin-top: 4.5rem; padding-top: 4.5rem; border-top: 1px solid var(--metal-line); }
+.explore-row + .explore-row, .screenshots + .explore-row { margin-top: 4.5rem; padding-top: 4.5rem; border-top: 1px solid var(--metal-line); }
 .explore-row--reverse .explore__text { order: 2; }
 .explore__text > .bilingual { margin-top: 1.4rem; }
 .explore__text > .small { margin-top: 1.25rem; }
@@ -128,6 +131,7 @@ details[open] { padding-bottom: 1.6rem; }
 .boundary { margin-top: 1.6rem; font-size: 0.9rem; }
 .debate-stages { display: flex; flex-wrap: wrap; gap: 1rem 1.5rem; list-style: none; padding: 1.2rem 0; margin: 1.5rem 0; border-block: 1px solid var(--metal-line); font-size: 0.9rem; }
 .debate-stages li [lang="en"] { display: block; font-size: 0.75rem; color: var(--bone-300); }
+.debate-intro { max-width: 850px; }
 
 .install-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); align-items: start; gap: clamp(2rem, 6vw, 5rem); }
 .install-layout > * { min-width: 0; }
@@ -173,6 +177,8 @@ details[open] { padding-bottom: 1.6rem; }
 .lightbox::backdrop { background: rgb(0 0 0 / 0.8); }
 .lightbox__head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem 1rem; border-bottom: 1px solid var(--metal-line); }
 .lightbox__head p { font-size: 0.85rem; }
+.lightbox__actions { display: flex; align-items: center; flex: 0 0 auto; gap: 1rem; }
+.lightbox__actions a { display: inline-flex; align-items: center; min-height: 44px; font-size: 0.8rem; }
 .lightbox__head button { flex: 0 0 auto; min-height: 44px; padding: 0.4rem 0.8rem; background: transparent; border: 1px solid var(--metal-line); border-radius: 3px; font-size: 0.8rem; }
 .lightbox__body { overflow: auto; max-height: calc(90vh - 100px); max-height: calc(90dvh - 100px); }
 .lightbox__body img { width: 100%; height: auto; }
@@ -198,17 +204,17 @@ details[open] { padding-bottom: 1.6rem; }
   .hero { padding-top: 7.5rem; }
   .split, .explore-row, .install-layout { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
   .explore-row--reverse .explore__text { order: initial; }
-  .explore-row + .explore-row { margin-top: 3rem; padding-top: 3rem; }
+  .explore-row + .explore-row, .screenshots + .explore-row { margin-top: 3rem; padding-top: 3rem; }
   .steps li { padding-left: 3rem; }
   .steps li:first-child { padding-top: 0.5rem; }
-  .screenshot-grid { grid-template-columns: 1fr; gap: 1.5rem; }
-  .screenshot-grid img { height: 260px; }
+  .capture-grid { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
   .install-layout { gap: 3rem; }
   .model-setup { padding-top: 2.5rem; border-top: 1px solid var(--metal-line); }
   .guide-links { grid-template-columns: 1fr; }
   .guide-links > a { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
   .lightbox { width: calc(100% - 1rem); }
-  .lightbox__head { align-items: start; padding: 0.75rem; }
+  .lightbox__head { align-items: start; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem; }
+  .lightbox__actions { width: 100%; justify-content: space-between; }
   summary [lang="en"] { display: block; margin-left: 1rem; margin-top: 0.25rem; }
 }
 @media (max-width: 400px) {

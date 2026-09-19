@@ -14,18 +14,20 @@ const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
 const SCENARIO_ID = "capture-social-proof";
 const BRANCH_ID = "branch-root";
 const VIEWPORT = { width: 1440, height: 900 };
+// These images use fixtures and are test output, not real product captures.
+const CAPTURE_ROOT = path.join(FRONTEND_ROOT, "output/capture/social-proof-fixtures");
 
 const OUTPUTS = {
   zh: {
-    feed: path.join(REPO_ROOT, "docs/screenshots/24-initial-feed.png"),
-    ledger: path.join(REPO_ROOT, "docs/screenshots/25-action-ledger.png"),
+    feed: path.join(CAPTURE_ROOT, "initial-feed.zh.png"),
+    ledger: path.join(CAPTURE_ROOT, "action-ledger.zh.png"),
   },
   en: {
-    feed: path.join(REPO_ROOT, "docs/screenshots-en/24-initial-feed.png"),
-    ledger: path.join(REPO_ROOT, "docs/screenshots-en/25-action-ledger.png"),
+    feed: path.join(CAPTURE_ROOT, "initial-feed.en.png"),
+    ledger: path.join(CAPTURE_ROOT, "action-ledger.en.png"),
   },
-  feedGif: path.join(REPO_ROOT, "site/assets/gifs/initial-feed-bilingual.gif"),
-  ledgerGif: path.join(REPO_ROOT, "site/assets/gifs/action-ledger-bilingual.gif"),
+  feedGif: path.join(CAPTURE_ROOT, "initial-feed-bilingual.gif"),
+  ledgerGif: path.join(CAPTURE_ROOT, "action-ledger-bilingual.gif"),
   manifest: path.join(FRONTEND_ROOT, "output/capture/social-proof.capture-manifest.json"),
 };
 

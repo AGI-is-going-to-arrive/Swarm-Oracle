@@ -19,6 +19,10 @@ Explore “What if...?” with AI characters. Read different endings, check the 
 
 </details>
 
+以下实拍展示 2026-09-19 的真实应用界面，以虚构的灯港群岛电池分配问题为例。概念插画另有标注。完整界面见[截图导览](docs/SCREENSHOTS.md)。
+
+The screenshots show the app on 2026-09-19 using fictional battery-allocation material set in the island city of Harborlight. Conceptual illustrations have separate labels. See the full [screenshot tour](docs/SCREENSHOTS.en.md).
+
 <a id="built-in-official-samples-and-snapshot-demo"></a>
 <a id="内置官方样例与-snapshot-演示"></a>
 
@@ -31,6 +35,21 @@ After starting the backend and frontend, open http://127.0.0.1:18928 and choose 
 已有的推演文件（Snapshot，扩展名为 `.swarm`）也可从首页导入。样例和快照让你浏览已有推演；生成新内容需要配置模型。逐步操作见[使用指南](docs/USAGE.md)。
 
 You can also import a saved run, called a Snapshot, as a `.swarm` file from the home page. Samples and snapshots let you explore saved runs; generating new content requires a configured model. Follow the [usage guide](docs/USAGE.en.md) for the steps.
+
+### 首页 / Home
+
+从问题输入区开始，或打开官方样例先阅读已有结果。
+
+Start with a question, or open an official sample to read a saved result.
+
+![首页](docs/screenshots/current/home.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Home](docs/screenshots/current/home.en.webp)
+
+</details>
 
 <a id="quick-start"></a>
 <a id="快速开始"></a>
@@ -102,6 +121,21 @@ For native development, follow the [backend setup](backend/README.md) and [front
 
 Browsing official samples and read-only replay makes no model calls. New simulations, follow-ups, reruns, prediction scoring, and full analyses may incur model costs. See [usage](docs/USAGE.en.md) for scoring recovery and [configuration](docs/CONFIGURATION.en.md) for model connections and reasoning effort.
 
+### 结果页 / Result
+
+展开结局卡，先读完成状态和模拟权重，再选择核对、追问或改变。
+
+Expand an ending, read its status and simulation weight, then choose evidence, questions, or a different decision.
+
+![结果页](docs/screenshots/current/result.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Result](docs/screenshots/current/result.en.webp)
+
+</details>
+
 <a id="w21-visibility-and-truth-boundaries"></a>
 <a id="w21-可见性与真值边界"></a>
 
@@ -115,6 +149,36 @@ Branch shares are simulation weights, not probabilities of real events. A propos
 
 Use the output to explore assumptions; it does not establish facts. Read the [feature guide](docs/FEATURES.en.md) for scope and the [security guide](SECURITY.md) for data and credential boundaries.
 
+### 因果图 / Causal map
+
+点开事件或动作，检查相关证据、规则和状态详情。
+
+Select an event or action and inspect its evidence, rules, and state details.
+
+![因果图](docs/screenshots/current/causal-map.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Causal map](docs/screenshots/current/causal-map.en.webp)
+
+</details>
+
+### 节点追问 / Ask about a node
+
+核对对象与上下文，在同一面板发送追问并阅读已完成的回复。
+
+Check the target and context, then ask a follow-up and read the completed reply in the same panel.
+
+![节点追问](docs/screenshots/current/node-chat.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Ask about a node](docs/screenshots/current/node-chat.en.webp)
+
+</details>
+
 <a id="documentation"></a>
 <a id="文档"></a>
 <a id="stack-and-license"></a>
@@ -126,13 +190,16 @@ Use the output to explore assumptions; it does not establish facts. Read the [fe
 | --- | --- |
 | [使用指南](docs/USAGE.md)：从样例到追问、比较和分享。 | [Usage guide](docs/USAGE.en.md): samples, follow-ups, comparison, and sharing. |
 | [功能指南](docs/FEATURES.md)：根据你想做的事找入口。 | [Feature guide](docs/FEATURES.en.md): find a tool by the task you want to do. |
+| [截图导览](docs/SCREENSHOTS.md)：按任务查看当前界面。 | [Screenshot tour](docs/SCREENSHOTS.en.md): current screens grouped by task. |
 | [配置说明](docs/CONFIGURATION.md) · [部署与备份](deploy/README.md) | [Configuration](docs/CONFIGURATION.en.md) · [Deployment and backups](deploy/README.md) |
 | [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md) · [变更记录](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) |
-| [介绍页](https://agi-is-going-to-arrive.github.io/Swarm-Oracle/) · [中文介绍视频](https://www.bilibili.com/video/BV1Xh7168ECc) | [Showcase](https://agi-is-going-to-arrive.github.io/Swarm-Oracle/) · [Chinese introduction video](https://www.bilibili.com/video/BV1Xh7168ECc) |
+| [介绍页](https://agi-is-going-to-arrive.github.io/Swarm-Oracle/) · [较早版本演示视频](https://www.bilibili.com/video/BV1Xh7168ECc) | [Showcase](https://agi-is-going-to-arrive.github.io/Swarm-Oracle/) · [Earlier-version demo video](https://www.bilibili.com/video/BV1Xh7168ECc) |
 
-界面截图参考：[中文首页](docs/screenshots/01-home.png) · [英文首页](docs/screenshots-en/01-home.png)。这些是产品截图，具体控件以当前版本为准。
+视频记录较早版本；查看 2026-09-19 的界面请使用本页实拍或截图导览。
 
-UI screenshot references: [Chinese home page](docs/screenshots/01-home.png) · [English home page](docs/screenshots-en/01-home.png). These are product screenshots; consult the current app for its controls.
+The video shows an earlier version. Use the screenshots here or the screenshot tour for the interface captured on 2026-09-19.
+
+
 
 后端使用 FastAPI、SQLModel、SQLite 和 ChromaDB；前端使用 React、TypeScript、Phaser 和 Vite。许可证：[GNU AGPL-3.0](LICENSE)。
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import String, and_, case, cast, distinct, false, func, or_, tuple_
 from sqlmodel import Session, select
@@ -19,6 +19,7 @@ from app.models import (
     FactionSnapshot,
     Round,
     Scenario,
+    ScenarioStatus,
     SimulationAction,
 )
 from app.services.agent_message_metadata import (
@@ -106,6 +107,63 @@ def report_result_fingerprint(session: Session, scenario_id: str) -> str:
     ).all():
         add({key: getattr(agent, key) for key in ("id", "name", "role", "tier", "persona")})
     return f"v1:{digest.hexdigest()}"
+
+
+def report_result_is_stale(
+    session: Session,
+    scenario: Scenario,
+    full_report: object,
+) -> bool:
+    """Apply the same durable result-scope check to every report projection."""
+    parsed_context = scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
+    return isinstance(full_report, dict) and (
+        scenario.status not in {ScenarioStatus.NARRATING, ScenarioStatus.DONE}
+        or parsed_context.get(REPORT_SCOPE_FINGERPRINT_KEY)
+        != report_result_fingerprint(session, scenario.id)
+    )
+
+
+@dataclass(frozen=True)
+class CurrentReportVerdict:
+    target_branch_id: str
+    headline_answer: str
+    confidence: Literal["high", "medium", "low"] | None
+
+
+def current_report_verdict(
+    full_report: object,
+    *,
+    stale: bool,
+    eligible_branch_ids: set[str],
+) -> CurrentReportVerdict | None:
+    """Keep a validated report's Claim, confidence, and target bound together."""
+    if (
+        not isinstance(full_report, dict)
+        or stale
+        or full_report.get("status") not in {"complete", "partial"}
+        or full_report.get("target_branch_id") not in eligible_branch_ids
+    ):
+        return None
+    verdict = full_report.get("verdict")
+    if not isinstance(verdict, dict):
+        return None
+    headline = str(verdict.get("headline_answer") or "").strip()
+    if not headline:
+        return None
+    analytic_confidence = verdict.get("analytic_confidence")
+    level = (
+        str(analytic_confidence.get("level") or "").strip().lower()
+        if isinstance(analytic_confidence, dict)
+        else ""
+    )
+    confidence: Literal["high", "medium", "low"] | None = None
+    if level in {"high", "medium", "low"}:
+        confidence = level
+    return CurrentReportVerdict(
+        target_branch_id=full_report["target_branch_id"],
+        headline_answer=headline,
+        confidence=confidence,
+    )
 
 
 def _require_nonblank_id(value: object, *, label: str) -> None:

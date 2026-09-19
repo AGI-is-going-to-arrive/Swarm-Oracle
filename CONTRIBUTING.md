@@ -97,7 +97,8 @@ The check compares LF, CRLF, paths, and empty arguments exactly. An incompatible
 - 行为变化补相关回归测试；文案和链接使用相应静态检查。 / Add relevant regression tests for behavior changes; use suitable static checks for copy and links.
 - 改共享文件前协调，保留他人工作，不夹带无关重构。 / Coordinate on shared files, preserve others' work, and keep unrelated refactors out.
 - 不提交 `.env`、API key、token、数据库、缓存和无关生成工件。 / Do not commit `.env`, API keys, tokens, databases, caches, or unrelated generated artifacts.
-- `llmdoc/` 记录架构与合同；架构变化需单独核对和同步，不写入一次运行的测试计数。 / `llmdoc/` records architecture and contracts; review and sync architecture changes separately, without per-run test counts.
+- 行为或架构变化时，同步相关使用与开发说明，写清接口约定和限制。 / Update the relevant user and developer guides when behavior or architecture changes. Explain interface contracts and limitations.
+- 内部工作记录、实施计划、测试报告、临时数据和生成物只保存在本地，并加入 `.gitignore`。自动化测试源码、必要的测试夹具和 CI 配置继续保留在仓库，方便他人复验。 / Keep internal work notes, implementation plans, test reports, temporary data, and generated output local and ignored by Git. Keep automated test source, required fixtures, and CI configuration in the repository so others can reproduce the checks.
 
 ## 内容与漏洞报告 / Content and vulnerability reports
 

@@ -18,6 +18,7 @@ import type {
   AgentMemoryEntry,
 } from '../../types';
 import type { AgentProfileObservation } from '../../lib/agentProfileObservation';
+import { getAgentEmotionLabel, getAgentStanceLabel, getAgentTierLabel } from '../../lib/agentValueLabels';
 export type { AgentProfileObservation } from '../../lib/agentProfileObservation';
 import { getAgentProfileData, normalizeScenarioAgentSource } from '../../api/client';
 import {
@@ -191,7 +192,7 @@ export function AgentProfileSheet({
       ? t('result.agent_profile_sheet.emotion_metadata_unavailable', {
           defaultValue: 'Emotion metadata unavailable',
         })
-      : observation?.emotion ?? agent.emotion;
+      : getAgentEmotionLabel(observation?.emotion ?? agent.emotion, locale);
   const displayedMetadataFailureCode = observation?.emotionMetadataStatus === 'unavailable'
     ? visibleMetadataFailureCode(observation.emotionMetadataFailureCode)
     : null;
@@ -268,7 +269,7 @@ export function AgentProfileSheet({
             </DialogDescription>
             <div className="agent-profile-sheet__badges">
               <span className="agent-profile-sheet__badge" data-badge="tier">
-                {tier}
+                {getAgentTierLabel(t, tier)}
               </span>
               <span className="agent-profile-sheet__badge" data-badge="source">
                 {sourceLabel}
@@ -287,7 +288,7 @@ export function AgentProfileSheet({
               {agent.stance ? (
                 <div>
                   <dt>{t('result.agent_profile_sheet.baseline_stance_label', { defaultValue: 'Configured stance' })}</dt>
-                  <dd>{agent.stance}</dd>
+                  <dd>{getAgentStanceLabel(agent.stance, locale)}</dd>
                 </div>
               ) : null}
               <div>

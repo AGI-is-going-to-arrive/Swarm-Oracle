@@ -7,6 +7,7 @@ import {
   useSearchParams,
 } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { getAgentEmotionLabel } from '../lib/agentValueLabels';
 
 import {
   getCausalGraph,
@@ -180,7 +181,7 @@ const EMOTION_ICONS: Record<string, string> = {
 // ── Component ─────────────────────────────────────────────────
 
 export function ReplayView() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
@@ -786,7 +787,7 @@ export function ReplayView() {
                           </span>
                         ) : emotion && (
                           <span className="replay-card__emotion">
-                            {EMOTION_ICONS[emotion] ?? ''} {emotion}
+                            {EMOTION_ICONS[emotion] ?? ''} {getAgentEmotionLabel(emotion, i18n.resolvedLanguage || i18n.language)}
                           </span>
                         )}
                       </div>

@@ -28,10 +28,12 @@ const i18n = i18next.createInstance();
 
 void i18n.init({
   lng: 'en',
+  fallbackLng: 'en',
   resources: {
     en: {
       translation: {
         common: { close: 'Close', unknown: 'Unknown' },
+        sim: { panel: { tier_core: 'Core', tier_important: 'Key', tier_crowd: 'Crowd' } },
         result: {
           agent_profile_sheet: {
             title: 'Agent Profile',
@@ -71,6 +73,11 @@ void i18n.init({
             history_coordinates: 'Scenario {{scenario}} · Branch {{branch}} · R{{round}} · {{eventType}}',
           },
         },
+      },
+    },
+    zh: {
+      translation: {
+        sim: { panel: { tier_core: '核心', tier_important: '重要', tier_crowd: '群众' } },
       },
     },
   },
@@ -136,7 +143,8 @@ function renderSheet(
 const mockedGetAgentProfileData = vi.mocked(getAgentProfileData);
 
 describe('AgentProfileSheet', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en');
     mockedGetAgentProfileData.mockReset();
   });
 
@@ -159,7 +167,29 @@ describe('AgentProfileSheet', () => {
     expect(screen.getByText('Ada')).toBeInTheDocument();
     expect(screen.getByText('Systems analyst')).toBeInTheDocument();
     expect(screen.getByText('AI-generated')).toBeInTheDocument();
-    expect(screen.getByText('IMPORTANT')).toBeInTheDocument();
+    expect(screen.getByText('Key')).toBeInTheDocument();
+  });
+
+  it('uses Chinese labels for the tier and known emotion', async () => {
+    await i18n.changeLanguage('zh-CN');
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(makeAgent({ tier: 'CORE', emotion: 'neutral' }));
+
+    expect(await screen.findByText('核心')).toBeInTheDocument();
+    expect(screen.getByText('中性')).toBeInTheDocument();
+    expect(screen.queryByText('CORE')).not.toBeInTheDocument();
+    expect(screen.queryByText('neutral')).not.toBeInTheDocument();
+  });
+
+  it('localizes a canonical Chinese stance for an English profile', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(makeAgent({ stance: '支持', emotion: 'neutral' }));
+
+    expect(await screen.findByText('Supportive')).toBeInTheDocument();
+    expect(screen.getByText('Neutral')).toBeInTheDocument();
+    expect(screen.queryByText('支持')).not.toBeInTheDocument();
   });
 
   it('normalizes source badges before rendering', async () => {

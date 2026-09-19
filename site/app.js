@@ -2,22 +2,27 @@
 (function () {
   "use strict";
 
-  document.querySelectorAll("[data-illustration]").forEach(function (figure) {
-    figure.querySelectorAll("[data-art-lang]").forEach(function (button) {
-      button.addEventListener("click", function () {
-        var language = button.getAttribute("data-art-lang");
-        figure.querySelectorAll("[data-art-lang]").forEach(function (control) {
-          control.setAttribute("aria-pressed", String(control === button));
-        });
-        figure.querySelectorAll("[data-art-image]").forEach(function (image) {
-          image.hidden = image.getAttribute("data-art-image") !== language;
-        });
-        figure.querySelectorAll("[data-art-caption]").forEach(function (caption) {
-          caption.hidden = caption.getAttribute("data-art-caption") !== language;
+  function bindImageLanguages(selector, prefix) {
+    document.querySelectorAll(selector).forEach(function (figure) {
+      var attribute = "data-" + prefix;
+      figure.querySelectorAll("[" + attribute + "-lang]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var language = button.getAttribute(attribute + "-lang");
+          figure.querySelectorAll("[" + attribute + "-lang]").forEach(function (control) {
+            control.setAttribute("aria-pressed", String(control === button));
+          });
+          figure.querySelectorAll("[" + attribute + "-image]").forEach(function (image) {
+            image.hidden = image.getAttribute(attribute + "-image") !== language;
+          });
+          figure.querySelectorAll("[" + attribute + "-caption]").forEach(function (caption) {
+            caption.hidden = caption.getAttribute(attribute + "-caption") !== language;
+          });
         });
       });
     });
-  });
+  }
+  bindImageLanguages("[data-illustration]", "art");
+  bindImageLanguages("[data-capture]", "capture");
 
   var drawer = document.getElementById("drawer");
   var burger = document.getElementById("burger");
@@ -119,7 +124,10 @@
         image.alt = link.getAttribute("data-caption");
         image.width = Number(thumbnail.getAttribute("width"));
         image.height = Number(thumbnail.getAttribute("height"));
+        image.lang = link.lang || "zh-CN";
         caption.textContent = link.getAttribute("data-caption");
+        caption.lang = image.lang;
+        document.getElementById("lightbox-original").href = link.href;
         lightbox.showModal();
         lightbox.querySelector(".lightbox__body").scrollTop = 0;
         syncScrollLock();

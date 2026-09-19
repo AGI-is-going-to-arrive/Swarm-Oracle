@@ -17,7 +17,10 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
   const labelAgents = isZh ? '参与推演的 Agent 群' : 'Agent Swarm';
   const labelSources = isZh ? '已验证来源' : 'Verified Sources';
   const labelExcerpts = isZh ? '分支对话片段' : 'Excerpts';
-  const labelProb = isZh ? '概率' : 'Probability';
+  const labelProb = isZh ? '本次推演占比' : 'Share in this run';
+  const probabilityDisclaimer = isZh
+    ? '这是本次推演里的分支占比，不是现实事件发生的概率。'
+    : 'These are branch weights within this simulation, not real-world probabilities.';
 
   // Prevent script injection breakout by escaping closing script tag sequences
   const jsonStr = JSON.stringify(artifact).replace(/</g, '\\u003c');
@@ -314,6 +317,7 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
         <div>
           <section>
             <h3>${labelBranches}</h3>
+            <p>${probabilityDisclaimer}</p>
             <div class="list" id="rendered-branches"></div>
           </section>
         </div>
@@ -430,7 +434,7 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
 
             item.appendChild(itemHeader);
 
-            // Probability Bar
+            // Share within this simulation, not real-world odds.
             const barWrapper = document.createElement('div');
             barWrapper.className = 'bar-wrapper';
 
@@ -444,6 +448,7 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
             barInner.setAttribute('aria-valuenow', percentage);
             barInner.setAttribute('aria-valuemin', '0');
             barInner.setAttribute('aria-valuemax', '100');
+            barInner.setAttribute('aria-label', '${labelProb}: ' + bar.label);
             barInner.style.width = percentage + '%';
             barOuter.appendChild(barInner);
 

@@ -43,6 +43,10 @@ from app.services.public_artifacts import (
     build_public_artifact_from_mapping,
     scan_public_artifact_for_secrets,
 )
+from app.services.result_report.queries import (
+    REPORT_SCOPE_FINGERPRINT_KEY,
+    report_result_fingerprint,
+)
 
 
 @pytest.fixture
@@ -388,7 +392,7 @@ def test_public_artifact_roundtrips_as_stable_json() -> None:
         "branch_index": 1,
         "title": "Rationed grid",
         "verdict": "It likely holds with rationing.",
-        "confidence": "high",
+        "confidence": None,
     }
     assert decoded["probability_bars"][0] == {
         "branch_index": 1,
@@ -398,25 +402,24 @@ def test_public_artifact_roundtrips_as_stable_json() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw_confidence", "expected"),
+    "raw_confidence",
     [
-        ("high", "high"),
-        ("medium", "medium"),
-        ("low", "low"),
-        (None, None),
-        ("certain", None),
+        "high",
+        "medium",
+        "low",
+        None,
+        "certain",
     ],
 )
-def test_public_artifact_preserves_only_valid_confidence_tiers(
+def test_unbound_mapping_never_promotes_raw_confidence_to_branch_claims(
     raw_confidence: object,
-    expected: str | None,
 ) -> None:
     mapping = _dirty_mapping()
     mapping["parsed_context"]["result_quality"]["confidence"] = raw_confidence
 
     artifact = build_public_artifact_from_mapping(mapping)
 
-    assert artifact["branch_verdicts"][0]["confidence"] == expected
+    assert artifact["branch_verdicts"][0]["confidence"] is None
 
 
 def test_public_artifact_missing_confidence_emits_null() -> None:
@@ -458,9 +461,241 @@ def test_public_artifact_truncates_field_budgets() -> None:
     artifact = build_public_artifact_from_mapping(dirty)
 
     assert len(artifact["question"]) == MAX_QUESTION_CHARS
+    assert artifact["question"].endswith("…")
     assert len(artifact["display_agent_names"][0]) == MAX_AGENT_NAME_CHARS
     assert len(artifact["branch_verdicts"][0]["title"]) == MAX_TITLE_CHARS
     assert len(artifact["transcript_excerpts"][0]["excerpt"]) == MAX_EXCERPT_CHARS
+
+
+def test_public_question_excerpt_marks_truncation_without_splitting_a_word() -> None:
+    mapping = _dirty_mapping()
+    mapping["question"] = "route " * 52 + "and supporting residents throughout the flood"
+
+    question = build_public_artifact_from_mapping(mapping)["question"]
+
+    assert question == "route " * 52 + "and…"
+    assert len(question) <= MAX_QUESTION_CHARS
+    assert mapping["question"].endswith("throughout the flood")
+
+
+@pytest.mark.parametrize("question", ["Q" * 320, "船🚢" * 160])
+def test_public_question_at_the_character_budget_is_not_marked_truncated(question: str) -> None:
+    mapping = _dirty_mapping()
+    mapping["question"] = question
+    assert build_public_artifact_from_mapping(mapping)["question"] == question
+
+
+def test_public_question_excerpt_counts_unicode_characters_and_redacts_before_cutting() -> None:
+    mapping = _dirty_mapping()
+    mapping["question"] = "船🚢" * 170
+    question = build_public_artifact_from_mapping(mapping)["question"]
+    assert question == ("船🚢" * 170)[:319] + "…"
+    assert len(question) == MAX_QUESTION_CHARS
+
+    mapping["question"] = "safe " * 60 + "sk-publicartifact-secret and private material " * 5
+    question = build_public_artifact_from_mapping(mapping)["question"]
+    assert "sk-publicartifact-secret" not in question
+    assert question.endswith("…")
+    assert len(question) <= MAX_QUESTION_CHARS
+
+
+def _bind_current_public_report(
+    session: Session,
+    scenario: Scenario,
+    target_branch_id: str,
+    *,
+    confidence: str = "medium",
+    status: str = "complete",
+) -> dict[str, Any]:
+    from tests.test_result_report_contract import _legal_full_report
+
+    report = _legal_full_report()
+    report["status"] = status
+    report["target_branch_id"] = target_branch_id
+    report["verdict"]["headline_answer"] = "The current report supports this specific target claim."
+    report["verdict"]["analytic_confidence"] = {
+        "level": confidence,
+        "basis": "Evidence assessment for this report claim only.",
+    }
+    scenario.parsed_context = {**scenario.parsed_context, "full_report": report}
+    session.add(scenario)
+    session.flush()
+    scenario.parsed_context = {
+        **scenario.parsed_context,
+        REPORT_SCOPE_FINGERPRINT_KEY: report_result_fingerprint(session, scenario.id),
+    }
+    session.add(scenario)
+    session.commit()
+    return report
+
+
+@pytest.mark.parametrize("confidence", ["high", "medium", "low"])
+@pytest.mark.parametrize("report_status", ["complete", "partial"])
+def test_public_artifact_binds_current_report_confidence_to_its_target_claim_only(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    confidence: str,
+    report_status: str,
+) -> None:
+    monkeypatch.setattr(settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(settings, "FEATURE_RESULT_VERDICT", True)
+    scenario_id = _seed_public_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        parent = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).one()
+        assert scenario is not None
+        children = [
+            Branch(
+                scenario_id=scenario_id, parent_branch_id=parent.id,
+                title=f"Current leaf {index}", probability=probability,
+                status=BranchStatus.COMPLETED, insight=f"Independent leaf {index} claim.",
+            )
+            for index, probability in enumerate([0.5, 0.3, 0.2], start=1)
+        ]
+        session.add_all(children)
+        session.flush()
+        scenario.parsed_context = {
+            **scenario.parsed_context,
+            "result_quality": {
+                "verdict": "The old root model verdict.",
+                "confidence": "high",
+                "confidence_kind": "model_self_rating",
+                "confidence_terminal_branch_ids": [parent.id],
+            },
+        }
+        target = children[1]
+        report = _bind_current_public_report(
+            session, scenario, target.id, confidence=confidence, status=report_status,
+        )
+        artifact = build_public_artifact_for_scenario(session, scenario)
+
+    story_response = client.get(f"/api/scenario/{scenario_id}/story")
+    assert story_response.status_code == 200
+    story = story_response.json()
+    assert story["full_report_stale"] is False
+    assert story["verdict_confidence"] == confidence
+    assert story["verdict"] == report["verdict"]["headline_answer"]
+    target_verdict = next(
+        row for row in artifact["branch_verdicts"] if row["title"] == "Current leaf 2"
+    )
+    assert target_verdict["verdict"] == story["verdict"]
+    assert target_verdict["confidence"] == confidence
+    other_verdicts = [row for row in artifact["branch_verdicts"] if row is not target_verdict]
+    assert len(other_verdicts) == 2
+    assert all(row["confidence"] is None for row in other_verdicts)
+    assert {row["verdict"] for row in other_verdicts} == {
+        "Independent leaf 1 claim.", "Independent leaf 3 claim.",
+    }
+
+
+@pytest.mark.parametrize("report_status", ["partial", "complete"])
+def test_public_report_authority_matches_story_during_a_live_retry(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    report_status: str,
+) -> None:
+    from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
+
+    monkeypatch.setattr(settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(settings, "FEATURE_RESULT_VERDICT", True)
+    scenario_id = _seed_public_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        branch = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).one()
+        assert scenario is not None
+        report = _bind_current_public_report(
+            session, scenario, branch.id, confidence="high", status=report_status,
+        )
+
+    lease = acquire_runtime_lock(f"result-report:{scenario_id}", lease_seconds=30)
+    assert lease is not None
+    try:
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            artifact = build_public_artifact_for_scenario(session, scenario)
+        response = client.get(f"/api/scenario/{scenario_id}/story")
+        assert response.status_code == 200
+        story = response.json()
+        verdict = artifact["branch_verdicts"][0]
+        if report_status == "partial":
+            assert story["full_report"]["status"] == "generating"
+            assert story["verdict"] != report["verdict"]["headline_answer"]
+            assert verdict["confidence"] is None
+            assert verdict["verdict"] == "It likely holds with rationing."
+        else:
+            assert story["full_report"]["status"] == "complete"
+            assert verdict["verdict"] == story["verdict"] == report["verdict"]["headline_answer"]
+            assert verdict["confidence"] == story["verdict_confidence"] == "high"
+    finally:
+        release_runtime_lock(lease)
+
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        settled = build_public_artifact_for_scenario(session, scenario)["branch_verdicts"][0]
+    assert settled["verdict"] == report["verdict"]["headline_answer"]
+    assert settled["confidence"] == "high"
+
+
+@pytest.mark.parametrize(
+    "invalid_authority",
+    ["stale", "unbound", "wrong_target", "generating", "failed", "running", "disabled"],
+)
+def test_public_artifact_does_not_use_a_report_without_current_claim_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_authority: str,
+) -> None:
+    monkeypatch.setattr(settings, "FEATURE_RESULT_REPORT", True)
+    scenario_id = _seed_public_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        branch = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).one()
+        assert scenario is not None
+        report = _bind_current_public_report(session, scenario, branch.id, confidence="high")
+        parsed = dict(scenario.parsed_context)
+        if invalid_authority == "stale":
+            scenario.question += " The assumptions changed."
+        elif invalid_authority == "unbound":
+            parsed.pop(REPORT_SCOPE_FINGERPRINT_KEY)
+        elif invalid_authority == "wrong_target":
+            parsed["full_report"] = {**report, "target_branch_id": "another-scenario-branch"}
+        elif invalid_authority in {"generating", "failed"}:
+            parsed["full_report"] = {**report, "status": invalid_authority}
+        elif invalid_authority == "running":
+            scenario.status = ScenarioStatus.SIMULATING
+        elif invalid_authority == "disabled":
+            monkeypatch.setattr(settings, "FEATURE_RESULT_REPORT", False)
+        scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+
+        artifact = build_public_artifact_for_scenario(session, scenario)
+
+    assert artifact["branch_verdicts"][0]["confidence"] is None
+    assert artifact["branch_verdicts"][0]["verdict"] == "It likely holds with rationing."
+
+
+def test_public_v2_does_not_disguise_scoped_model_self_rating_as_analytic_confidence() -> None:
+    scenario_id = _seed_public_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        branch = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).one()
+        assert scenario is not None
+        parsed = dict(scenario.parsed_context)
+        parsed["result_quality"] = {
+            **parsed["result_quality"],
+            "confidence_kind": "model_self_rating",
+            "confidence_terminal_branch_ids": [branch.id],
+        }
+        scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+
+        artifact = build_public_artifact_for_scenario(session, scenario)
+
+    assert artifact["branch_verdicts"][0]["confidence"] is None
+    assert artifact["branch_verdicts"][0]["verdict"] == "It likely holds with rationing."
 
 
 def test_database_transcript_query_is_bounded() -> None:
@@ -836,7 +1071,13 @@ def test_public_artifact_v1_golden_remains_strict_and_matches_v2_shape() -> None
     PublicArtifactV1.model_validate(golden)
     assert generated["schema_version"] == PUBLIC_ARTIFACT_SCHEMA_VERSION
     PublicArtifactV2.model_validate(generated)
-    assert _key_shape(golden) == _key_shape(generated)
+    expected_v2 = {
+        **golden,
+        "schema_version": PUBLIC_ARTIFACT_SCHEMA_VERSION,
+        "branch_verdicts": [{**row, "confidence": None} for row in golden["branch_verdicts"]],
+    }
+    assert _key_shape(expected_v2) == _key_shape(generated)
+    assert all(row["confidence"] is None for row in generated["branch_verdicts"])
     assert golden["transcript_excerpts"]
     for excerpt in golden["transcript_excerpts"]:
         assert set(excerpt) == {"branch_index", "round", "agent_name", "excerpt"}

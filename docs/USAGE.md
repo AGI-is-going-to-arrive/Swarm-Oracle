@@ -24,6 +24,10 @@ Start with a saved sample, then decide whether to connect a model. Paths in this
 
 </details>
 
+以下实拍展示 2026-09-19 的真实应用界面，以虚构的灯港群岛电池分配问题为例。概念插画另有标注。完整界面见[截图导览](SCREENSHOTS.md)。
+
+The screenshots show the app on 2026-09-19 using fictional battery-allocation material set in the island city of Harborlight. Conceptual illustrations have separate labels. See the full [screenshot tour](SCREENSHOTS.en.md).
+
 1. 启动前端和后端，打开首页，选择一个官方样例。共有 3 个随附样例，打开时不需要 API Key，也不会调用模型。<br>
    Start the frontend and backend, open the home page, and choose an official sample. The three bundled samples need no API key and make no model calls when opened.
 
@@ -36,6 +40,21 @@ Start with a saved sample, then decide whether to connect a model. Paths in this
 官方样例是预先制作的演示数据，不代表真人参与或真实模型现场运行。打开样例不会启动新推演；之后主动追问、重演或生成分析时，才需要可用模型和相应功能。未完成的快照导入后会作为停止的历史保留，不会恢复原来的后台任务。
 
 Official samples contain prepared demonstration data, not evidence of live human participation or a model running now. Opening a sample does not start a new simulation. Later follow-ups, reruns, and analysis generation need a usable model and the matching features. An unfinished snapshot imports as stopped history and does not restart its original background task.
+
+### 首页 / Home
+
+从问题输入区开始，或打开官方样例先阅读已有结果。
+
+Start with a question, or open an official sample to read a saved result.
+
+![首页](screenshots/current/home.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Home](screenshots/current/home.en.webp)
+
+</details>
 
 <a id="result-page"></a>
 <a id="结果页"></a>
@@ -69,6 +88,21 @@ At `/result/:id`, check the original question and expand an ending’s story. Br
 
 Expand the additional tools for graphs, replay, chambers, and other views. Read the reason beside an unavailable action: there may be only one branch, missing data, read-only replay, or a disabled server feature.
 
+### 结果页 / Result
+
+展开结局卡，先读完成状态和模拟权重，再选择核对、追问或改变。
+
+Expand an ending, read its status and simulation weight, then choose evidence, questions, or a different decision.
+
+![结果页](screenshots/current/result.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Result](screenshots/current/result.en.webp)
+
+</details>
+
 ## 3. 核对证据与报告 / 3. Check evidence and reports
 
 1. 先打开“阅读已保存的证据”。选一条引文，核对是谁在哪条分支、哪一轮说的；不要把报告中的模型合成访谈当作逐字原话或新的真人采访。<br>
@@ -89,6 +123,21 @@ Expand the additional tools for graphs, replay, chambers, and other views. Read 
 提议、采纳和执行要分开看。例如角色都提到“延长 60 分钟”，并不等于共同承诺已经变更。适用一致采纳规则时，全轮参与者必须明确选择同一目标；即使已采纳，也不能据此断言已经执行。报告中的引文与来源检查不等于通用语义验证，也不证明现实中的因果。
 
 Read proposals, adoption, and execution separately. Characters mentioning “extend by 60 minutes” does not itself change a shared commitment. Under the unanimous-adoption rule, all participants in the round must choose the same target. Even an adopted target does not prove execution. Quote and source checks in a report do not provide general semantic verification or establish real-world causation.
+
+### 已保存的证据 / Saved evidence
+
+选择一条引文，查看对应角色、分支和轮次。
+
+Select a quote and inspect its character, branch, and round.
+
+![已保存的证据](screenshots/current/evidence.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Saved evidence](screenshots/current/evidence.en.webp)
+
+</details>
 
 ## 4. 从图谱详情追问 / 4. Ask from graph details
 
@@ -111,6 +160,21 @@ If the panel says a model is not configured, configure a connection; the draft a
 工作台的分屏隔条可拖动；用键盘聚焦后，左右方向键调整宽度，Enter 恢复均分。手机上可在对话面板内部滚动，继续访问历史与输入区。
 
 Drag the workbench divider to resize its panels. When it has keyboard focus, use Left/Right to resize and Enter to restore an equal split. On a phone, scroll within the conversation panel to reach history and the input area.
+
+### 节点追问 / Ask about a node
+
+核对对象与上下文，在同一面板发送追问并阅读已完成的回复。
+
+Check the target and context, then ask a follow-up and read the completed reply in the same panel.
+
+![节点追问](screenshots/current/node-chat.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Ask about a node](screenshots/current/node-chat.en.webp)
+
+</details>
 
 ## 5. 比较现有分支，或改写后重演 / 5. Compare saved branches or rewrite and replay
 
@@ -146,6 +210,21 @@ Drag the workbench divider to resize its panels. When it has keyboard focus, use
 
 You cannot rewrite without source statements, in read-only replay, or when the feature is disabled. Replay and branch analysis include shared history before the fork and follow the selected branch and round cutoff without mixing in a sibling branch’s continuation.
 
+### 改写一轮 / Rewrite a turn
+
+此图停在提交前：核对来源发言并填写替代内容，确认后才创建改写分支。
+
+This view is before submission. Check the source statement and enter a replacement before creating a rewrite branch.
+
+![改写一轮](screenshots/current/rewrite.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Rewrite a turn](screenshots/current/rewrite.en.webp)
+
+</details>
+
 ## 6. 为新推演配置模型 / 6. Configure a model for a new run
 
 1. 打开 `/admin/setup`，填写 Base URL、模型 ID 和所需 API Key。测试的是当前这组连接；修改字段后需要重新测试，或明确接受“未验证仍保存”。<br>
@@ -160,6 +239,21 @@ You cannot rewrite without source statements, in read-only replay, or when the f
 精确本地地址 `localhost`、`127.0.0.1`、`0.0.0.0`、`host.docker.internal` 和 `[::1]` 可免 key；其它远端地址需要 key。随附的 `127.0.0.1:8317` 加空值／占位 key 只是“未配置”默认值，不证明本机已有模型。完整规则见[配置说明](CONFIGURATION.md)。
 
 Exact local hosts `localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`, and `[::1]` can be keyless; remote endpoints need a key. The shipped `127.0.0.1:8317` with an empty or placeholder key is an unconfigured default, not proof that a model exists on your computer. See [configuration](CONFIGURATION.en.md) for the full rules.
+
+### 模型连接 / Model connection
+
+此图为保存前的连接表单：填写自己的连接信息，测试后再保存。
+
+This view is before saving. Enter your own connection details, test them, then save.
+
+![模型连接](screenshots/current/model-setup.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Model connection](screenshots/current/model-setup.en.webp)
+
+</details>
 
 <a id="start-a-live-simulation"></a>
 <a id="发起实时推演"></a>
@@ -182,6 +276,21 @@ Exact local hosts `localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`, a
 
 A Local Pack replaces its related settings and background together. Switching to a Quick Start, education template, or challenge clears the old pack context. A pack’s Snapshot demo opens saved data; if an interrupted import leaves the outcome unclear, check History first.
 
+### 启动前核对 / Launch review
+
+确认前检查问题、角色、轮数、模型和材料。
+
+Check the question, characters, rounds, model, and material before confirming.
+
+![启动前核对](screenshots/current/launch.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Launch review](screenshots/current/launch.en.webp)
+
+</details>
+
 <a id="during-a-run"></a>
 <a id="推演过程中"></a>
 
@@ -198,6 +307,21 @@ A Local Pack replaces its related settings and background together. Switching to
 
 - 有对应功能时，可在运行中使用干预、玩法卡、预测押注和世界线承诺。取消或失败后检查终态；未完成分支不会被当作成功结局。<br>
   Where supported, use interventions, gameplay cards, prediction bets, and worldline commitments during the run. After cancellation or failure, check the terminal status; unfinished branches do not count as successful endings.
+
+### 已保存的推演过程 / Saved simulation
+
+打开已保存的推演或回放，按轮查看角色发言与分支变化。
+
+Open a saved simulation or replay to inspect character statements and branch changes round by round.
+
+![已保存的推演过程](screenshots/current/simulation.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Saved simulation](screenshots/current/simulation.en.webp)
+
+</details>
 
 <a id="modes-and-workspaces"></a>
 <a id="模式与工作区"></a>
@@ -217,6 +341,21 @@ Enter a topic on the home page and choose the debate entry. Debate uses two side
 3. 在 `/debate/:id` 观看，完成后从结果页按需打开论点地图。历史辩论只读；显式重新启动会创建新运行。<br>
    Watch at `/debate/:id`, then open the argument map from the result when needed. Historical debates are read-only; an explicit restart creates a new run.
 
+### 已保存的辩论发言 / Saved debate statements
+
+按阶段查看已保存的正反双方发言，再打开结果页阅读裁决。
+
+Review the saved statements from both sides by stage, then open the result page for the verdict.
+
+![已保存的辩论发言](screenshots/current/debate.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Saved debate statements](screenshots/current/debate.en.webp)
+
+</details>
+
 ## 10. 继续会客厅与圆桌讨论 / 10. Continue in a chamber or roundtable
 
 - **结局会客厅：** 从一条世界线进入，围绕该结局追问。可尝试“只改一步”、证据投牌和后续讨论；模型选择在会客厅自己的高级设置中，不选时继承会客厅或当前推演保存的模型连接；没有保存的连接时才用服务器默认。保存连接失效时，需要重新选择。<br>
@@ -227,6 +366,21 @@ Enter a topic on the home page and choose the debate entry. Debate uses two side
 
 - **保存分析：** 支持保存的回答或分析完成后，再保存为笔记并确认成功提示。笔记仍是模拟分析，不会成为角色记忆、动作记录或已验证事实。<br>
   **Save analysis:** after a supported reply or analysis finishes, save it as a note and check the success message. The note remains simulation analysis; it does not become Agent memory, an action record, or a verified fact.
+
+### 世界线圆桌 / Worldline Roundtable
+
+查看不同世界线代表的发言，再按需要继续讨论。
+
+Read what representatives from different worldlines say, then continue the discussion as needed.
+
+![世界线圆桌](screenshots/current/roundtable.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Worldline Roundtable](screenshots/current/roundtable.en.webp)
+
+</details>
 
 ## 11. 创建、编辑与导入 Agent / 11. Create, edit, and import Agents
 
@@ -242,6 +396,21 @@ Enter a topic on the home page and choose the debate entry. Debate uses two side
 Agent Pack 不携带身份 ID、归属信息、记忆、成长记录、对话或单独存储的凭据。导出会脱敏常见密钥格式，分享前仍需检查自己写的人设文字。
 
 Agent Packs omit identity IDs, ownership data, memories, growth records, conversations, and separately stored credentials. Exports redact common key formats; still review the persona text you wrote before sharing.
+
+### 编辑角色 / Edit a character
+
+核对姓名、背景与立场；创建新角色或修改已有角色时，确认表单内容后再保存。
+
+Review the name, background, and stance. Check the form before saving a new character or changes to an existing one.
+
+![编辑角色](screenshots/current/agent-editor.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Edit a character](screenshots/current/agent-editor.en.webp)
+
+</details>
 
 <a id="other-routes"></a>
 <a id="其他入口"></a>
@@ -264,6 +433,21 @@ With prediction scoring enabled, reopening a result may call the model to finish
 分享前检查问题、姓名、背景材料和用户自填内容。公开 replay 会移除身份与连接等私有字段，但脱敏不能替你判断一段文字是否适合公开。
 
 Before sharing, inspect the question, names, background, and your own text. Public replay removes private identity and connection fields, but redaction cannot decide whether a passage is appropriate to share.
+
+### 分享与导出 / Share and export
+
+在分享面板选择用途；下方可下载公开摘要或复制 Gallery 链接，分享前检查原问题和角色文字。
+
+Choose a sharing format. Download the public summary or copy its Gallery link at the bottom, and review the question and character text before sharing.
+
+![分享与导出](screenshots/current/share.zh.webp)
+
+<details>
+<summary>English screenshot / 英文实拍</summary>
+
+![Share and export](screenshots/current/share.en.webp)
+
+</details>
 
 <a id="faq"></a>
 <a id="常见问题"></a>

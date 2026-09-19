@@ -19,6 +19,10 @@ Find an entry by the task you want to complete. Follow the [usage guide](USAGE.e
 
 </details>
 
+The screenshots show the app on 2026-09-19 using fictional battery-allocation material set in the island city of Harborlight. Conceptual illustrations have separate labels. See the full [screenshot tour](SCREENSHOTS.en.md).
+
+以下实拍展示 2026-09-19 的真实应用界面，以虚构的灯港群岛电池分配问题为例。概念插画另有标注。完整界面见[截图导览](SCREENSHOTS.md)。
+
 <a id="snapshot-demo-and-live-generation"></a>
 <a id="snapshot-演示与实时生成"></a>
 
@@ -89,6 +93,66 @@ Entries: `/workbench/:id`, `/kg-explorer/:id`, `/timeline-galaxy/:id`, `/replay/
 
 入口：`/workbench/:id`、`/kg-explorer/:id`、`/timeline-galaxy/:id`、`/replay/:id` 和 `/result/:id/compare`。只读 replay 不提供新的对话、重演或报告生成。
 
+### Graph Workbench / 图谱工作台
+
+Select a node, inspect its text, character, and sources, then ask a question from its details.
+
+点开节点，查看正文、角色和来源，再从详情进入追问。
+
+![Graph Workbench](screenshots/current/workbench.en.webp)
+
+<details>
+<summary>中文实拍 / Chinese screenshot</summary>
+
+![图谱工作台](screenshots/current/workbench.zh.webp)
+
+</details>
+
+### Knowledge Graph / 知识图谱
+
+Select an entity and follow its relationships to related content and available questions.
+
+选择实体节点，沿关系查看相关内容和可用的追问入口。
+
+![Knowledge Graph](screenshots/current/knowledge-graph.en.webp)
+
+<details>
+<summary>中文实拍 / Chinese screenshot</summary>
+
+![知识图谱](screenshots/current/knowledge-graph.zh.webp)
+
+</details>
+
+### Ask about a node / 节点追问
+
+Check the target and context, then ask a follow-up and read the completed reply in the same panel.
+
+核对对象与上下文，在同一面板发送追问并阅读已完成的回复。
+
+![Ask about a node](screenshots/current/node-chat.en.webp)
+
+<details>
+<summary>中文实拍 / Chinese screenshot</summary>
+
+![节点追问](screenshots/current/node-chat.zh.webp)
+
+</details>
+
+### Rewrite a turn / 改写一轮
+
+This view is before submission. Check the source statement and enter a replacement before creating a rewrite branch.
+
+此图停在提交前：核对来源发言并填写替代内容，确认后才创建改写分支。
+
+![Rewrite a turn](screenshots/current/rewrite.en.webp)
+
+<details>
+<summary>中文实拍 / Chinese screenshot</summary>
+
+![改写一轮](screenshots/current/rewrite.zh.webp)
+
+</details>
+
 ## Separate proposal, adoption, and execution / 分清提议、采纳和执行
 
 ![English illustration: Conceptual illustration of proposals, shared adoption, and execution records / 英文配图：提议、共同采纳与执行记录的概念图](illustrations/decisions.en.webp)
@@ -134,6 +198,40 @@ Entries: `/debate/:id`, `/debate/:id/result`, chambers on the result page, and `
 
 入口：`/debate/:id`、`/debate/:id/result`、结果页会客厅和 `/roundtable/:id`。模型准备、总结、可选分析与重试可能增加请求和费用，固定辩论规模不等于固定调用次数。
 
+### Saved debate statements / 已保存的辩论发言
+
+Review the saved statements from both sides by stage, then open the result page for the verdict.
+
+按阶段查看已保存的正反双方发言，再打开结果页阅读裁决。
+
+![Saved debate statements](screenshots/current/debate.en.webp)
+
+<details>
+<summary>中文实拍 / Chinese screenshot</summary>
+
+![已保存的辩论发言](screenshots/current/debate.zh.webp)
+
+</details>
+
+### Debate result / 辩论结果
+
+Read the verdict and scoring rationale, then expand the arguments as needed.
+
+查看裁决与评分依据，再按需要展开论点。
+
+![Debate result](screenshots/current/debate-result.en.webp)
+
+<details>
+<summary>中文实拍 / Chinese screenshot</summary>
+
+![辩论结果](screenshots/current/debate-result.zh.webp)
+
+</details>
+
+Inspect the links between accepted arguments and the verdict in the [debate argument map](SCREENSHOTS.en.md#debate-argument-map).
+
+查看[辩论论点地图](SCREENSHOTS.md#debate-argument-map)，沿连线核对已采纳论点与裁决。
+
 <a id="agents-and-personal-data"></a>
 <a id="agent-与个人数据"></a>
 
@@ -170,7 +268,3 @@ Entries: `/debate/:id`, `/debate/:id/result`, chambers on the result page, and `
 
 - **Local use and releases.** The default setup targets local and self-hosted use. Follow the [deployment guide](../deploy/README.md) for public access, backups, image verification, and rollback.<br>
   **本地与发布。** 默认按本地／自托管使用设计。公开访问、数据备份、镜像验证和旧版恢复按[部署说明](../deploy/README.md)操作。
-
-Simulation screenshot references: [Chinese](screenshots/21-simulation.png) · [English](screenshots-en/21-simulation.png). These are product screenshots; consult the current app for controls and available features.
-
-推演界面截图参考：[中文](screenshots/21-simulation.png) · [英文](screenshots-en/21-simulation.png)。这是产品截图，控件与可用能力以当前应用为准。

@@ -11,10 +11,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law_grand_tribunal-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law_grand_tribunal-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law_grand_tribunal-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law_grand_tribunal-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/law_grand_tribunal-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/law_grand_tribunal-replay-headed.png",
+        "result": "frontend/output/e2e/law_grand_tribunal-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/law_grand_tribunal-result-headed/share-generated.png"
       }
     },
     {
@@ -26,10 +26,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith_council-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith_council-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith_council-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith_council-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/faith_council-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/faith_council-replay-headed.png",
+        "result": "frontend/output/e2e/faith_council-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/faith_council-result-headed/share-generated.png"
       }
     },
     {
@@ -41,10 +41,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic_review_chamber-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic_review_chamber-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic_review_chamber-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic_review_chamber-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/generic_review_chamber-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/generic_review_chamber-replay-headed.png",
+        "result": "frontend/output/e2e/generic_review_chamber-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/generic_review_chamber-result-headed/share-generated.png"
       }
     }
   ]

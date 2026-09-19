@@ -11,6 +11,17 @@ import {
 
 export const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024; // 2 MB
 
+function questionExcerpt(text: string): string {
+  const characters = Array.from(text);
+  if (characters.length <= 320) return text;
+  let excerpt = characters.slice(0, 319).join('');
+  if (/[A-Za-z0-9]/.test(characters[318]) && /[A-Za-z0-9]/.test(characters[319])) {
+    const boundary = excerpt.lastIndexOf(' ');
+    if (boundary > 0) excerpt = excerpt.slice(0, boundary);
+  }
+  return `${excerpt.trimEnd()}…`;
+}
+
 /**
  * Runtime type guard and validator for the PublicArtifact JSON contract.
  * Ensures the object has exactly the expected fields, clamps values, truncates arrays,
@@ -50,7 +61,7 @@ export function parsePublicArtifact(
   if (typeof obj.question !== 'string') {
     return { ok: false, reason: 'malformed' };
   }
-  const question = obj.question.slice(0, 320);
+  const question = questionExcerpt(obj.question);
 
   // Language: string, max 8
   if (typeof obj.language !== 'string') {

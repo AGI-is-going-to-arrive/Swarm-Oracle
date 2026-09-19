@@ -970,6 +970,9 @@ describe('LocalPackPicker', () => {
       render(<LocalPackPicker onImport={onImportMock} onDemoImported={vi.fn()} />);
 
       const importButton = await screen.findByRole('button', { name: importLabel });
+      expect(screen.getByText(uiLanguage === 'zh' ? '中英双语' : 'Chinese and English')).toBeInTheDocument();
+      expect(screen.getByText(uiLanguage === 'zh' ? '谨慎' : 'Conservative')).toBeInTheDocument();
+      expect(screen.queryByText('bilingual')).not.toBeInTheDocument();
       fireEvent.click(importButton);
 
       expect(onImportMock).toHaveBeenCalledTimes(1);
