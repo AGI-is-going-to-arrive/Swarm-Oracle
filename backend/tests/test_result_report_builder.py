@@ -6,8 +6,10 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -6270,21 +6272,65 @@ async def test_build_report_cancel_does_not_overwrite_after_runtime_lock_loss(mo
 
 @pytest.mark.asyncio
 async def test_build_report_refreshes_runtime_lock_during_generation(monkeypatch):
+    from app.services import runtime_lock as runtime_lock_module
     from app.services.result_report import builder
     from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
 
     scenario_id = _seed_report_scenario()
     lock_key = builder._report_runtime_lock_key(scenario_id)
     responses = [_outline_payload(["timeline"]), _section_payload("timeline")]
-    competing_leases: list[Any] = []
+    lease_seconds = 0.05
+    lease_clock_now = time.time()
+    lease_clock_guard = threading.Lock()
+    renewal_request: tuple[float, asyncio.Event] | None = None
+    refreshed_leases: list[runtime_lock_module.RuntimeLockLease] = []
+    competing_leases: list[runtime_lock_module.RuntimeLockLease | None] = []
+    loop = asyncio.get_running_loop()
+
+    def lease_time() -> float:
+        with lease_clock_guard:
+            return lease_clock_now
+
+    # Keep real SQLite leases and heartbeat scheduling. A CI scheduling pause
+    # must not expire this deliberately tiny test lease before renewal runs.
+    lease_clock = SimpleNamespace(time=lease_time, monotonic=time.monotonic, sleep=time.sleep)
+    monkeypatch.setattr(builder, "time", lease_clock)
+    monkeypatch.setattr(runtime_lock_module, "time", lease_clock)
+
+    def track_refresh(
+        lease: runtime_lock_module.RuntimeLockLease | None,
+        *,
+        lease_seconds: float,
+    ) -> runtime_lock_module.RuntimeLockLease | None:
+        nonlocal lease_clock_now
+        assert lease is not None
+        with lease_clock_guard:
+            # SQLite busy retries of the same lease retain the same clock time.
+            lease_clock_now = max(lease_clock_now, lease.expires_at - lease_seconds / 2)
+        refreshed = runtime_lock_module.refresh_runtime_lock(lease, lease_seconds=lease_seconds)
+        if refreshed is not None:
+            assert refreshed.expires_at > lease.expires_at
+            refreshed_leases.append(refreshed)
+            with lease_clock_guard:
+                request = renewal_request
+                reached_target = request is not None and lease_clock_now >= request[0]
+            if reached_target and request is not None:
+                loop.call_soon_threadsafe(request[1].set)
+        return refreshed
 
     async def slow_llm(prompt: str, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal renewal_request
         if prompt.startswith(("REPORT_OUTLINE", "REPORT_SECTION_REACT")):
-            await asyncio.sleep(0.08)
+            renewed = asyncio.Event()
+            with lease_clock_guard:
+                renewal_request = (lease_clock_now + lease_seconds * 2, renewed)
+            await asyncio.wait_for(renewed.wait(), timeout=5)
+            with lease_clock_guard:
+                renewal_request = None
             competing = await asyncio.to_thread(
                 acquire_runtime_lock,
                 lock_key,
-                lease_seconds=0.05,
+                lease_seconds=lease_seconds,
             )
             competing_leases.append(competing)
             if competing is not None:
@@ -6295,7 +6341,8 @@ async def test_build_report_refreshes_runtime_lock_during_generation(monkeypatch
         raise builder.ResultReportBuilderError("force template indicators")
 
     monkeypatch.setattr(builder, "llm_call_json", slow_llm)
-    monkeypatch.setattr(builder, "_report_runtime_lock_lease_seconds", lambda: 0.05)
+    monkeypatch.setattr(builder, "refresh_runtime_lock", track_refresh)
+    monkeypatch.setattr(builder, "_report_runtime_lock_lease_seconds", lambda: lease_seconds)
     monkeypatch.setattr(
         builder,
         "_report_runtime_lock_refresh_interval",
@@ -6305,8 +6352,12 @@ async def test_build_report_refreshes_runtime_lock_during_generation(monkeypatch
     report = await builder.build_report(scenario_id, "branch-a", overrides=None)
 
     assert report.status == "complete"
+    assert refreshed_leases
     assert competing_leases
     assert all(lease is None for lease in competing_leases)
+    released = acquire_runtime_lock(lock_key, lease_seconds=lease_seconds)
+    assert released is not None
+    release_runtime_lock(released)
 
 
 @pytest.mark.asyncio
