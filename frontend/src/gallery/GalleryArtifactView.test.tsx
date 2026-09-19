@@ -11,9 +11,9 @@ vi.mock('react-i18next', () => ({
         'gallery.confidence_high': 'High Confidence',
         'gallery.confidence_medium': 'Medium Confidence',
         'gallery.confidence_low': 'Low Confidence',
-        'gallery.probability_label': 'Share in this run',
-        'gallery.probability_aria': 'Share in this run: {{branch}}',
-        'gallery.probability_disclaimer': 'These are branch weights within this simulation, not real-world probabilities.',
+        'gallery.probability_label': 'Simulation weight',
+        'gallery.probability_aria': 'Simulation weight: {{branch}}',
+        'gallery.probability_disclaimer': 'Branches may use different assumptions. These weights are not real-world probabilities and need not add up to 100%.',
         'gallery.sources_title': 'Verified Sources',
         'gallery.agents_title': 'Agent Swarm',
         'gallery.transcript_title': 'Excerpts',
@@ -100,6 +100,19 @@ describe('GalleryArtifactView rendering', () => {
     expect(screen.getByText('R1')).toBeInTheDocument();
   });
 
+  it('preserves independent counterfactual weights without presenting a normalized distribution', () => {
+    render(<GalleryArtifactView artifact={{
+      ...artifact,
+      probability_bars: [
+        { branch_index: 1, label: 'First assumption', probability: 1 },
+        { branch_index: 2, label: 'Second assumption', probability: 1 },
+      ],
+    }} />);
+    expect(screen.getAllByText('100% Simulation weight')).toHaveLength(2);
+    expect(screen.getByText(/need not add up to 100%/)).toBeInTheDocument();
+    expect(screen.queryByText(/Share in this run/)).not.toBeInTheDocument();
+  });
+
   it('degrades gracefully with empty arrays', () => {
     const emptyArtifact: PublicArtifact = {
       schema_version: PUBLIC_ARTIFACT_SCHEMA_VERSION,
@@ -128,9 +141,9 @@ describe('GalleryArtifactView rendering', () => {
     expect(progressbar).toHaveAttribute('aria-valuenow', '75');
     expect(progressbar).toHaveAttribute('aria-valuemin', '0');
     expect(progressbar).toHaveAttribute('aria-valuemax', '100');
-    expect(progressbar).toHaveAttribute('aria-label', 'Share in this run: Northern Triumph');
-    expect(screen.getByText('75% Share in this run')).toBeInTheDocument();
-    expect(screen.getByText('These are branch weights within this simulation, not real-world probabilities.')).toBeInTheDocument();
+    expect(progressbar).toHaveAttribute('aria-label', 'Simulation weight: Northern Triumph');
+    expect(screen.getByText('75% Simulation weight')).toBeInTheDocument();
+    expect(screen.getByText('Branches may use different assumptions. These weights are not real-world probabilities and need not add up to 100%.')).toBeInTheDocument();
     expect(screen.queryByText('75% Probability')).not.toBeInTheDocument();
   });
 

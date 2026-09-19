@@ -19,6 +19,28 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 
 ## 未发布 / [Unreleased]
 
+### 2026-09-19：真实界面与公开资料 / Real screens and public material
+
+- 新拍摄 31 组中英文真实截图，覆盖推演、图谱、追问、改写、报告、辩论、分享与手机界面；介绍页和使用指南保留概念插图，并补上对应的真实操作画面。
+
+  Added 31 pairs of real Chinese and English screenshots covering runs, graphs, conversations, rewrites, reports, debates, sharing, and mobile views. The landing page and guides keep the concept illustrations and now show the actual interface beside the instructions.
+
+- 内部知识、实施计划、历史实验页面和测试生成物改为只保留本地；自动化测试源码、CI 和必要夹具继续公开。
+
+  Internal knowledge, implementation plans, historical experiment pages, and generated test artifacts now stay local. Automated test source, CI, and required fixtures remain public.
+
+- 修正界面中已知角色、情绪、场景、关系和状态值的语言显示，保留原始发言与自定义文本。
+
+  Localized known character, emotion, scene, relation, and state labels while preserving original speech and custom text.
+
+- 公开摘要的置信度只对应当前报告的同一结论与分支；报告重试期间不复用未完成分析的旧置信度。长问题节选保留完整词并显示省略号。
+
+  Exported confidence now belongs to the same claim and branch in the current report. An unfinished analysis does not retain old confidence during a retry. Long question excerpts keep complete words and show an ellipsis.
+
+- 分享页使用“模拟权重”，说明不同条件下的分支不一定合计为 100%，也不代表现实概率。
+
+  Shared pages label values as simulation weights. Branches with different assumptions need not add up to 100%, and the values do not represent real-world probabilities.
+
 ### 2026-09-19：双语文档 / Bilingual documentation
 
 - 公开文档改为相邻中英对照，并配中英文独立插图；更新锁定依赖、配置、安全、备份与贡献指引，区分样例浏览、真实调用和不同发布证明。

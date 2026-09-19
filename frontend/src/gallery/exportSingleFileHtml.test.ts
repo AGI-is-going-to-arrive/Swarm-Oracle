@@ -108,8 +108,8 @@ describe('buildSingleFileGalleryHtml exporter', () => {
   });
 
   it.each([
-    ['en', 'Share in this run', 'These are branch weights within this simulation, not real-world probabilities.'],
-    ['zh', '本次推演占比', '这是本次推演里的分支占比，不是现实事件发生的概率。'],
+    ['en', 'Simulation weight', 'Branches may use different assumptions. These weights are not real-world probabilities and need not add up to 100%.'],
+    ['zh', '模拟权重', '各分支可能采用不同条件。这些权重不是现实概率，也不一定合计为 100%。'],
   ] as const)('labels branch weights truthfully in %s, including the accessible name', (language, label, disclaimer) => {
     const documentNode = renderExportedArtifact(artifact, language);
 

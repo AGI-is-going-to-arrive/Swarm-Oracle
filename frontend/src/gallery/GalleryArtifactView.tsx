@@ -84,7 +84,7 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
                           />
                         </div>
                         <div className="probability-text">
-                          {percentage}% {t('gallery.probability_label', 'Share in this run')}
+                          {percentage}% {t('gallery.probability_label', 'Simulation weight')}
                         </div>
                       </div>
 

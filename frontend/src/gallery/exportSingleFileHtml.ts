@@ -17,10 +17,10 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
   const labelAgents = isZh ? '参与推演的 Agent 群' : 'Agent Swarm';
   const labelSources = isZh ? '已验证来源' : 'Verified Sources';
   const labelExcerpts = isZh ? '分支对话片段' : 'Excerpts';
-  const labelProb = isZh ? '本次推演占比' : 'Share in this run';
+  const labelProb = isZh ? '模拟权重' : 'Simulation weight';
   const probabilityDisclaimer = isZh
-    ? '这是本次推演里的分支占比，不是现实事件发生的概率。'
-    : 'These are branch weights within this simulation, not real-world probabilities.';
+    ? '各分支可能采用不同条件。这些权重不是现实概率，也不一定合计为 100%。'
+    : 'Branches may use different assumptions. These weights are not real-world probabilities and need not add up to 100%.';
 
   // Prevent script injection breakout by escaping closing script tag sequences
   const jsonStr = JSON.stringify(artifact).replace(/</g, '\\u003c');
