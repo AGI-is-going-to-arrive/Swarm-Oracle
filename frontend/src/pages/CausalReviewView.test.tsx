@@ -1594,7 +1594,7 @@ describe('CausalReviewView', () => {
     const view = renderView();
 
     await screen.findByTestId('reactflow');
-    expect(document.body).toHaveClass('has-causal-graph');
+    await waitFor(() => expect(document.body).toHaveClass('has-causal-graph'));
 
     view.unmount();
     expect(document.body).not.toHaveClass('has-causal-graph');
