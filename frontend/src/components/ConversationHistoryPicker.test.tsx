@@ -146,11 +146,11 @@ describe('ConversationHistoryPicker', () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(screen.queryByText('conversation.history.no_history')).not.toBeInTheDocument();
-    });
+    const loadMore = await screen.findByRole('button', { name: 'conversation.history.load_more' });
+    expect(loadMore).toBeEnabled();
+    expect(screen.queryByText('conversation.history.no_history')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'conversation.history.load_more' }));
+    fireEvent.click(loadMore);
 
     await waitFor(() => {
       expect(apiMocks.getScenarioConversations).toHaveBeenCalledWith('scenario-1', 20, 20);
