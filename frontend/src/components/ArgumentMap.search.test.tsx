@@ -108,59 +108,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('@xyflow/react', async () => {
+vi.mock('@xyflow/react', async (importOriginal) => {
   const React = await import('react');
+  const actual = await importOriginal<typeof import('@xyflow/react')>();
 
-  function useNodesStateMock<T>(initial: T[]) {
-    const [patchFn, setPatchFn] = React.useState<((nodes: T[]) => T[]) | null>(null);
-    const [dragPositions, setDragPositions] = React.useState<Map<string, { x: number; y: number }>>(new Map());
-    const baseNodes = React.useMemo(() => {
-      if (patchFn) return patchFn(initial);
-      return initial;
-    }, [initial, patchFn]);
-    const nodes = React.useMemo(() => {
-      if (dragPositions.size === 0) return baseNodes;
-      return baseNodes.map((n) => {
-        const id = (n as Record<string, unknown>).id as string;
-        const pos = dragPositions.get(id);
-        return pos ? { ...n, position: pos } as T : n;
-      });
-    }, [baseNodes, dragPositions]);
-    /* eslint-disable react-hooks/preserve-manual-memoization */
-    const setNodes = React.useCallback(
-      (arg: T[] | ((prev: T[]) => T[])) => {
-        if (typeof arg === 'function') {
-          const updater = arg as (prev: T[]) => T[];
-          setPatchFn(() => (current: T[]) => updater(current));
-        } else {
-          setPatchFn(null);
-          setDragPositions(new Map());
-        }
-      },
-      [],
-    );
-    const onNodesChange = React.useCallback(
-      (changes: Array<{ id: string; type: string; position?: { x: number; y: number }; dragging?: boolean }>) => {
-        setDragPositions((prev) => {
-          const next = new Map(prev);
-          for (const c of changes) {
-            if (c.type === 'position' && c.position) {
-              next.set(c.id, c.position);
-            }
-          }
-          return next;
-        });
-      },
-      [],
-    );
-    /* eslint-enable react-hooks/preserve-manual-memoization */
-    return [nodes, setNodes, onNodesChange] as const;
-  }
-  function useEdgesStateMock<T>(initial: T[]) {
-    const setEdges = React.useCallback(() => {}, []);
-    const onEdgesChange = React.useCallback(() => {}, []);
-    return [initial, setEdges, onEdgesChange] as const;
-  }
   return {
     ReactFlow: (props: Record<string, unknown>) => {
       const nodes = props.nodes as Array<{ id: string; position?: { x: number; y: number }; focusable?: boolean; ariaLabel?: string | null; ariaRole?: string | null; data?: Record<string, unknown> }> | undefined;
@@ -219,8 +170,8 @@ vi.mock('@xyflow/react', async () => {
     ),
     Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
     MarkerType: { ArrowClosed: 'arrowclosed' },
-    useNodesState: useNodesStateMock,
-    useEdgesState: useEdgesStateMock,
+    useNodesState: actual.useNodesState,
+    useEdgesState: actual.useEdgesState,
   };
 });
 
@@ -365,12 +316,11 @@ describe('P2-4 drag + search', () => {
 
   it('does not activate search state when input is empty', async () => {
     renderWithSearchData();
-    await screen.findByTestId('reactflow');
+    const n1 = await screen.findByTestId('rf-node-n1');
 
     expect(screen.queryByText('No matches')).not.toBeInTheDocument();
     expect(screen.queryByText(/match/)).not.toBeInTheDocument();
 
-    const n1 = screen.getByTestId('rf-node-n1');
     expect(n1).toHaveAttribute('data-dimmed', 'false');
     expect(n1).toHaveAttribute('data-search-match', 'false');
   });
@@ -392,7 +342,7 @@ describe('P2-4 drag + search', () => {
   it('search input does not reset dragged node positions', async () => {
     const user = userEvent.setup();
     renderWithSearchData();
-    await screen.findByTestId('reactflow');
+    await screen.findByTestId('rf-node-n1');
 
     await act(async () => {
       screen.getByTestId('rf-dispatch-position').click();
@@ -417,7 +367,7 @@ describe('P2-4 drag + search', () => {
   it('node click does not reset dragged node positions', async () => {
     const user = userEvent.setup();
     renderWithSearchData();
-    await screen.findByTestId('reactflow');
+    await screen.findByTestId('rf-node-n1');
 
     await act(async () => {
       screen.getByTestId('rf-dispatch-position').click();
